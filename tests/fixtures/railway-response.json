@@ -1,0 +1,11 @@
+{
+  "data": {
+    "deploymentLogs": [
+      {
+        "timestamp": "2026-08-18T12:00:00Z",
+        "message": "request completed",
+        "severity": "info"
+      }
+    ]
+  }
+}

@@ -40,13 +40,35 @@ projects:
         token_env: GRAFANA_TOKEN
 ```
 
-The initial implementation requires exactly one VictoriaLogs backend for the
-selected project. It queries the last hour and emits at most 100 entries.
+Railway deployment logs can be configured with stable project, environment,
+and service IDs. `ctx` resolves the latest successful deployment on each query,
+falling back to the latest deployment when none succeeded.
+
+```yaml
+projects:
+  api:
+    backends:
+      - name: railway-production
+        type: railway
+        project_id: 00000000-0000-0000-0000-000000000000
+        environment_id: 00000000-0000-0000-0000-000000000000
+        service_id: 00000000-0000-0000-0000-000000000000
+        token_env: RAILWAY_TOKEN
+        auth: project_token
+```
+
+Use `auth: project_token` for Railway project tokens, which are sent with the
+`Project-Access-Token` header. Use `auth: bearer` for account or workspace
+tokens. Railway queries use its [log filter syntax](https://docs.railway.com/observability/logs).
+
+The current implementation requires exactly one VictoriaLogs or Railway
+backend for the selected project. It queries the last hour and emits at most
+100 entries.
 
 Backend support:
 
 - VictoriaLogs through the Grafana API (implemented)
-- Railway deployment logs through the Railway API (planned)
+- Railway deployment logs through the Railway API (implemented)
 
 ## Non-goals
 
