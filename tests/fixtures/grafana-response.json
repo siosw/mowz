@@ -1,0 +1,22 @@
+{
+  "results": {
+    "A": {
+      "frames": [
+        {
+          "schema": {
+            "fields": [
+              { "name": "Time", "type": "time" },
+              { "name": "Line", "type": "string" }
+            ]
+          },
+          "data": {
+            "values": [
+              ["2026-08-18T12:00:00Z"],
+              ["request completed"]
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -21,18 +21,32 @@ ctx <project> <query>
 
 The query is sent unchanged to each backend configured for the project.
 Results are attributed to their backend and emitted as compact JSON only.
-Backends are queried independently; a failure is reported alongside successful
-results rather than failing the whole request.
+The first slice supports one backend; independent fan-out and partial failure
+reporting are planned follow-up work.
 
 ## Configuration
 
 Projects and their backends are declared in a repository-local `.ctx.yaml` file.
 Credentials are supplied through environment variables referenced by that file.
 
-Initial backends:
+```yaml
+projects:
+  api:
+    backends:
+      - name: production
+        type: victoria_logs
+        url: https://grafana.example.com
+        datasource_uid: victoria-logs
+        token_env: GRAFANA_TOKEN
+```
 
-- VictoriaLogs through the Grafana API
-- Railway deployment logs through the Railway API
+The initial implementation requires exactly one VictoriaLogs backend for the
+selected project. It queries the last hour and emits at most 100 entries.
+
+Backend support:
+
+- VictoriaLogs through the Grafana API (implemented)
+- Railway deployment logs through the Railway API (planned)
 
 ## Non-goals
 
