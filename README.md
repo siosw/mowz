@@ -38,7 +38,19 @@ type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
 token_env = "GRAFANA_TOKEN"
+scope_filter = "_stream:{environment=\"production\"}"
 ```
+
+`scope_filter` is optional. When set, `ctx` sends it through the VictoriaLogs
+Grafana query model as `extraFilters`, which the datasource applies using
+VictoriaLogs `extra_filters` semantics. The user's LogsQL expression remains
+unchanged and separate from this fixed filter. This requires VictoriaLogs
+Grafana datasource plugin v0.18.1 or later.
+
+The scope filter is an application safety boundary that limits queries made
+through `ctx`; it is not credential-level authorization. Use credentials and
+backend access controls with an appropriate least-privilege scope when a user
+must not be able to bypass this application.
 
 Railway deployment logs can be configured with stable project, environment,
 and service IDs. `ctx` resolves the latest successful deployment on each query,

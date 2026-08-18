@@ -27,6 +27,7 @@ enum Backend {
         url: String,
         datasource_uid: String,
         token_env: String,
+        scope_filter: Option<String>,
     },
     Railway {
         name: String,
@@ -90,9 +91,18 @@ pub async fn query_project(
             url,
             datasource_uid,
             token_env,
+            scope_filter,
         } => {
             let token = read_token(token_env)?;
-            let response = query_grafana(client, url, datasource_uid, &token, query).await?;
+            let response = query_grafana(
+                client,
+                url,
+                datasource_uid,
+                &token,
+                query,
+                scope_filter.as_deref(),
+            )
+            .await?;
             let (entries, truncated) = bound_entries(extract_entries(&response), false);
             (name, entries, truncated)
         }
@@ -167,16 +177,21 @@ async fn query_grafana(
     datasource_uid: &str,
     token: &str,
     query: &str,
+    scope_filter: Option<&str>,
 ) -> Result<Value> {
     let endpoint = format!("{}/api/ds/query", grafana_url.trim_end_matches('/'));
+    let mut query_model = json!({
+        "refId": "A",
+        "datasource": { "uid": datasource_uid },
+        "expr": query,
+        "queryType": "range",
+        "maxLines": RESULT_LIMIT + 1,
+    });
+    if let Some(scope_filter) = scope_filter {
+        query_model["extraFilters"] = json!(scope_filter);
+    }
     let payload = json!({
-        "queries": [{
-            "refId": "A",
-            "datasource": { "uid": datasource_uid },
-            "expr": query,
-            "queryType": "range",
-            "maxLines": RESULT_LIMIT + 1,
-        }],
+        "queries": [query_model],
         "from": "now-1h",
         "to": "now",
     });
@@ -504,6 +519,47 @@ auth = "project_token"
                 && environment_id == "environment-id"
                 && service_id == "service-id"
                 && token_env == "RAILWAY_TOKEN"
+        ));
+    }
+
+    #[test]
+    fn parses_optional_victoria_logs_scope_filter() {
+        let config: Config = toml::from_str(
+            r#"[projects.scoped]
+
+[[projects.scoped.backends]]
+name = "scoped-production"
+type = "victoria_logs"
+url = "https://grafana.example.com"
+datasource_uid = "victoria-logs"
+token_env = "GRAFANA_TOKEN"
+scope_filter = "_stream:{environment=\"production\"}"
+
+[projects.unscoped]
+
+[[projects.unscoped.backends]]
+name = "unscoped-production"
+type = "victoria_logs"
+url = "https://grafana.example.com"
+datasource_uid = "victoria-logs"
+token_env = "GRAFANA_TOKEN"
+"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &config.projects["scoped"].backends[0],
+            Backend::VictoriaLogs {
+                scope_filter: Some(scope_filter),
+                ..
+            } if scope_filter == "_stream:{environment=\"production\"}"
+        ));
+        assert!(matches!(
+            &config.projects["unscoped"].backends[0],
+            Backend::VictoriaLogs {
+                scope_filter: None,
+                ..
+            }
         ));
     }
 

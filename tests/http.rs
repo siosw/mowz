@@ -29,6 +29,7 @@ async fn queries_grafana_with_configured_credentials_and_bounds_output() {
                 "refId": "A",
                 "datasource": { "uid": "victoria-logs" },
                 "expr": "_stream:{app=\"api\"}",
+                "extraFilters": "_stream:{environment=\"production\"}",
                 "queryType": "range",
                 "maxLines": 101,
             }],
@@ -57,6 +58,7 @@ type = "victoria_logs"
 url = "{}"
 datasource_uid = "victoria-logs"
 token_env = "{token_env}"
+scope_filter = "_stream:{{environment=\"production\"}}"
 "#,
             server.uri()
         ),
