@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+  printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$1"
+}
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step "Checking system dependencies"
+missing_packages=()
+for package in build-essential ca-certificates curl; do
+  if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
+    missing_packages+=("$package")
+  fi
+done
+
+if ((${#missing_packages[@]})); then
+  sudo apt-get update
+  sudo apt-get install -y "${missing_packages[@]}"
+fi
+
+step "Installing the Rust toolchain"
+if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain none
+fi
+
+# shellcheck disable=SC1091
+source "$HOME/.cargo/env"
+rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+
+profile_marker="# ctx Rust toolchain"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >>"$HOME/.bash_profile" <<'EOF'
+
+# ctx Rust toolchain
+[[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+EOF
+fi
+
+step "Fetching locked Cargo dependencies"
+cargo fetch --locked
+
+step "Orb setup complete"
