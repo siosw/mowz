@@ -19,7 +19,8 @@ It provides one command for searching logs across a project's configured backend
 ctx <project> <query>
 ```
 
-The query is sent unchanged to each backend configured for the project.
+The query is sent unchanged to VictoriaLogs and environment-scoped Railway
+backends. Service-scoped Railway backends add their configured service filter.
 Results are attributed to their backend and emitted as compact JSON only.
 The first slice supports one backend; independent fan-out and partial failure
 reporting are planned follow-up work.
@@ -52,9 +53,11 @@ through `ctx`; it is not credential-level authorization. Use credentials and
 backend access controls with an appropriate least-privilege scope when a user
 must not be able to bypass this application.
 
-Railway deployment logs can be configured with stable project, environment,
-and service IDs. `ctx` resolves the latest successful deployment on each query,
-falling back to the latest deployment when none succeeded.
+Railway logs use `environmentLogs` and are explicitly scoped to either one
+service or every service in the configured environment. Existing Railway
+configurations with a `service_id` remain service-scoped; `scope = "service"`
+is shown below for clarity. The user's filter is combined with a fixed
+`@service:<service_id>` constraint.
 
 ```toml
 [projects.api]
@@ -62,9 +65,25 @@ falling back to the latest deployment when none succeeded.
 [[projects.api.backends]]
 name = "railway-production"
 type = "railway"
-project_id = "00000000-0000-0000-0000-000000000000"
 environment_id = "00000000-0000-0000-0000-000000000000"
+scope = "service"
 service_id = "00000000-0000-0000-0000-000000000000"
+token_env = "RAILWAY_TOKEN"
+auth = "project_token"
+```
+
+To search all services in one environment, set `scope = "environment"` and
+omit `service_id`. Environment scope is never inferred from a missing service
+ID.
+
+```toml
+[projects.api]
+
+[[projects.api.backends]]
+name = "railway-production"
+type = "railway"
+environment_id = "00000000-0000-0000-0000-000000000000"
+scope = "environment"
 token_env = "RAILWAY_TOKEN"
 auth = "project_token"
 ```
@@ -72,6 +91,8 @@ auth = "project_token"
 Use `auth = "project_token"` for Railway project tokens, which are sent with the
 `Project-Access-Token` header. Use `auth = "bearer"` for account or workspace
 tokens. Railway queries use its [log filter syntax](https://docs.railway.com/observability/logs).
+Returned Railway entries include `serviceId` and `deploymentId` when Railway
+supplies those source tags.
 
 The current implementation requires exactly one VictoriaLogs or Railway
 backend for the selected project. It queries the last hour and emits at most
@@ -80,7 +101,7 @@ backend for the selected project. It queries the last hour and emits at most
 Backend support:
 
 - VictoriaLogs through the Grafana API (implemented)
-- Railway deployment logs through the Railway API (implemented)
+- Railway service- and environment-scoped logs through the Railway API (implemented)
 
 ## Non-goals
 

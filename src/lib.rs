@@ -31,12 +31,21 @@ enum Backend {
     },
     Railway {
         name: String,
-        project_id: String,
         environment_id: String,
-        service_id: String,
+        #[serde(default)]
+        scope: RailwayScope,
+        service_id: Option<String>,
         token_env: String,
         auth: RailwayAuth,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RailwayScope {
+    #[default]
+    Service,
+    Environment,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -108,30 +117,21 @@ pub async fn query_project(
         }
         Backend::Railway {
             name,
-            project_id,
             environment_id,
+            scope,
             service_id,
             token_env,
             auth,
         } => {
+            let filter = scope.filter(service_id.as_deref(), query)?;
             let token = read_token(token_env)?;
-            let deployment_id = resolve_railway_deployment(
-                client,
-                RAILWAY_API_URL,
-                &token,
-                *auth,
-                project_id,
-                environment_id,
-                service_id,
-            )
-            .await?;
             let response = query_railway_logs(
                 client,
                 RAILWAY_API_URL,
                 &token,
                 *auth,
-                &deployment_id,
-                query,
+                environment_id,
+                &filter,
             )
             .await?;
             let (entries, truncated) = bound_entries(extract_railway_entries(&response), true);
@@ -147,6 +147,26 @@ pub async fn query_project(
         errors: Vec::new(),
         truncated,
     })
+}
+
+impl RailwayScope {
+    fn filter(self, service_id: Option<&str>, filter: &str) -> Result<String> {
+        match (self, service_id) {
+            (Self::Service, Some(service_id)) if filter.is_empty() => {
+                Ok(format!("@service:{service_id}"))
+            }
+            (Self::Service, Some(service_id)) => {
+                Ok(format!("@service:{service_id} AND ({filter})"))
+            }
+            (Self::Service, None) => {
+                bail!("Railway service scope requires service_id")
+            }
+            (Self::Environment, None) => Ok(filter.to_owned()),
+            (Self::Environment, Some(_)) => {
+                bail!("Railway environment scope must not configure service_id")
+            }
+        }
+    }
 }
 
 fn read_token(token_env: &str) -> Result<String> {
@@ -218,85 +238,28 @@ async fn query_grafana(
     serde_json::from_str(&body).context("failed to parse Grafana response as JSON")
 }
 
-async fn resolve_railway_deployment(
-    client: &Client,
-    api_url: &str,
-    token: &str,
-    auth: RailwayAuth,
-    project_id: &str,
-    environment_id: &str,
-    service_id: &str,
-) -> Result<String> {
-    let query = r#"query Deployments($input: DeploymentListInput!) {
-  deployments(input: $input) {
-    edges { node { id createdAt status } }
-  }
-}"#;
-    let response = query_railway_api(
-        client,
-        api_url,
-        token,
-        auth,
-        query,
-        json!({
-            "input": {
-                "projectId": project_id,
-                "environmentId": environment_id,
-                "serviceId": service_id,
-            }
-        }),
-    )
-    .await?;
-
-    let mut deployments = response
-        .pointer("/data/deployments/edges")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|edge| edge.get("node"))
-        .collect::<Vec<_>>();
-    deployments.sort_by(|left, right| {
-        right
-            .get("createdAt")
-            .and_then(Value::as_str)
-            .cmp(&left.get("createdAt").and_then(Value::as_str))
-    });
-
-    let deployment = deployments
-        .iter()
-        .copied()
-        .find(|deployment| {
-            deployment
-                .get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|status| status.eq_ignore_ascii_case("success"))
-        })
-        .or_else(|| deployments.first().copied())
-        .ok_or_else(|| eyre::eyre!("Railway returned no deployments for the configured service"))?;
-
-    deployment
-        .get("id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| eyre::eyre!("Railway deployment is missing an id"))
-}
-
 async fn query_railway_logs(
     client: &Client,
     api_url: &str,
     token: &str,
     auth: RailwayAuth,
-    deployment_id: &str,
+    environment_id: &str,
     filter: &str,
 ) -> Result<Value> {
-    let query = r#"query DeploymentLogs($deploymentId: String!, $limit: Int, $filter: String, $startDate: DateTime) {
-  deploymentLogs(deploymentId: $deploymentId, limit: $limit, filter: $filter, startDate: $startDate) {
+    let query = r#"query EnvironmentLogs($environmentId: String!, $filter: String, $beforeDate: String!, $anchorDate: String!, $afterDate: String!, $beforeLimit: Int!, $afterLimit: Int!) {
+  environmentLogs(environmentId: $environmentId, filter: $filter, beforeDate: $beforeDate, anchorDate: $anchorDate, afterDate: $afterDate, beforeLimit: $beforeLimit, afterLimit: $afterLimit) {
     timestamp
     message
     severity
+    tags {
+      serviceId
+      deploymentId
+    }
   }
 }"#;
-    let start_date = (Utc::now() - TimeDelta::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let now = Utc::now();
+    let start_date = (now - TimeDelta::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let end_date = now.to_rfc3339_opts(SecondsFormat::Secs, true);
 
     query_railway_api(
         client,
@@ -305,10 +268,13 @@ async fn query_railway_logs(
         auth,
         query,
         json!({
-            "deploymentId": deployment_id,
-            "limit": RESULT_LIMIT + 1,
+            "environmentId": environment_id,
             "filter": filter,
-            "startDate": start_date,
+            "beforeDate": start_date,
+            "anchorDate": end_date,
+            "afterDate": end_date,
+            "beforeLimit": RESULT_LIMIT + 1,
+            "afterLimit": 0,
         }),
     )
     .await
@@ -361,13 +327,13 @@ async fn query_railway_api(
 
 fn extract_railway_entries(response: &Value) -> Vec<Map<String, Value>> {
     response
-        .pointer("/data/deploymentLogs")
+        .pointer("/data/environmentLogs")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_object)
         .map(|entry| {
-            ["timestamp", "message", "severity"]
+            let mut selected = ["timestamp", "message", "severity"]
                 .into_iter()
                 .filter_map(|field| {
                     entry
@@ -376,7 +342,20 @@ fn extract_railway_entries(response: &Value) -> Vec<Map<String, Value>> {
                         .cloned()
                         .map(|value| (field.to_owned(), value))
                 })
-                .collect()
+                .collect::<Map<_, _>>();
+            if let Some(tags) = entry.get("tags").and_then(Value::as_object) {
+                selected.extend(
+                    ["serviceId", "deploymentId"]
+                        .into_iter()
+                        .filter_map(|field| {
+                            tags.get(field)
+                                .filter(|value| !value.is_null())
+                                .cloned()
+                                .map(|value| (field.to_owned(), value))
+                        }),
+                );
+            }
+            selected
         })
         .filter(|entry: &Map<String, Value>| !entry.is_empty())
         .collect()
@@ -481,15 +460,17 @@ mod tests {
         assert_eq!(
             extract_railway_entries(&response),
             vec![Map::from_iter([
+                ("deploymentId".to_owned(), json!("deployment-id")),
                 ("message".to_owned(), json!("request completed")),
                 ("severity".to_owned(), json!("info")),
+                ("serviceId".to_owned(), json!("service-id")),
                 ("timestamp".to_owned(), json!("2026-08-18T12:00:00Z")),
             ])]
         );
     }
 
     #[test]
-    fn parses_railway_backend_config() {
+    fn parses_legacy_railway_service_config() {
         let config: Config = toml::from_str(
             r#"[projects.api]
 
@@ -509,15 +490,14 @@ auth = "project_token"
             &config.projects["api"].backends[0],
             Backend::Railway {
                 name,
-                project_id,
                 environment_id,
+                scope: RailwayScope::Service,
                 service_id,
                 token_env,
                 auth: RailwayAuth::ProjectToken,
             } if name == "railway-production"
-                && project_id == "project-id"
                 && environment_id == "environment-id"
-                && service_id == "service-id"
+                && service_id.as_deref() == Some("service-id")
                 && token_env == "RAILWAY_TOKEN"
         ));
     }
@@ -563,71 +543,99 @@ token_env = "GRAFANA_TOKEN"
         ));
     }
 
-    #[tokio::test]
-    async fn queries_latest_successful_railway_deployment_and_bounds_logs() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/graphql/v2"))
-            .and(header("project-access-token", "secret-token"))
-            .and(body_string_contains("query Deployments("))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "deployments": { "edges": [
-                    { "node": {
-                        "id": "failed-deployment",
-                        "createdAt": "2026-08-18T12:00:00Z",
-                        "status": "FAILED"
-                    } },
-                    { "node": {
-                        "id": "successful-deployment",
-                        "createdAt": "2026-08-18T11:00:00Z",
-                        "status": "SUCCESS"
-                    } }
-                ] } }
-            })))
-            .mount(&server)
-            .await;
+    #[test]
+    fn parses_explicit_railway_environment_config() {
+        let config: Config = toml::from_str(
+            r#"[projects.api]
 
+[[projects.api.backends]]
+name = "railway-production"
+type = "railway"
+environment_id = "environment-id"
+scope = "environment"
+token_env = "RAILWAY_TOKEN"
+auth = "bearer"
+"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &config.projects["api"].backends[0],
+            Backend::Railway {
+                environment_id,
+                scope: RailwayScope::Environment,
+                service_id: None,
+                auth: RailwayAuth::Bearer,
+                ..
+            } if environment_id == "environment-id"
+        ));
+    }
+
+    #[test]
+    fn builds_explicit_railway_scope_filters() {
+        assert_eq!(
+            RailwayScope::Service
+                .filter(Some("service-id"), "@level:error OR timeout")
+                .unwrap(),
+            "@service:service-id AND (@level:error OR timeout)"
+        );
+        assert_eq!(
+            RailwayScope::Environment
+                .filter(None, "@level:error OR timeout")
+                .unwrap(),
+            "@level:error OR timeout"
+        );
+        assert_eq!(
+            RailwayScope::Service
+                .filter(None, "error")
+                .unwrap_err()
+                .to_string(),
+            "Railway service scope requires service_id"
+        );
+        assert_eq!(
+            RailwayScope::Environment
+                .filter(Some("service-id"), "error")
+                .unwrap_err()
+                .to_string(),
+            "Railway environment scope must not configure service_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn queries_bounded_railway_environment_logs() {
+        let server = MockServer::start().await;
         let logs = (0..101)
             .map(|number| {
                 json!({
                     "timestamp": format!("2026-08-18T12:00:{:02}Z", number % 60),
                     "message": format!("line {number}"),
                     "severity": "info",
+                    "tags": {
+                        "serviceId": "service-id",
+                        "deploymentId": format!("deployment-{number}"),
+                    },
                 })
             })
             .collect::<Vec<_>>();
         Mock::given(method("POST"))
             .and(path("/graphql/v2"))
             .and(header("project-access-token", "secret-token"))
-            .and(body_string_contains("query DeploymentLogs("))
+            .and(body_string_contains("query EnvironmentLogs("))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "deploymentLogs": logs }
+                "data": { "environmentLogs": logs }
             })))
             .mount(&server)
             .await;
 
         let api_url = format!("{}/graphql/v2", server.uri());
         let client = Client::new();
-        let deployment_id = resolve_railway_deployment(
-            &client,
-            &api_url,
-            "secret-token",
-            RailwayAuth::ProjectToken,
-            "project-id",
-            "environment-id",
-            "service-id",
-        )
-        .await
-        .unwrap();
-        assert_eq!(deployment_id, "successful-deployment");
-
         let response = query_railway_logs(
             &client,
             &api_url,
             "secret-token",
             RailwayAuth::ProjectToken,
-            &deployment_id,
-            "@level:error AND timeout",
+            "environment-id",
+            "@service:service-id AND (@level:error OR timeout)",
         )
         .await
         .unwrap();
@@ -635,38 +643,38 @@ token_env = "GRAFANA_TOKEN"
         assert!(truncated);
         assert_eq!(entries.len(), 100);
         assert_eq!(entries[0]["message"], "line 1");
+        assert_eq!(entries[0]["serviceId"], "service-id");
+        assert_eq!(entries[0]["deploymentId"], "deployment-1");
         assert_eq!(entries[99]["message"], "line 100");
 
         let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 2);
-        let deployment_request: Value = serde_json::from_slice(&requests[0].body).unwrap();
-        assert_eq!(
-            deployment_request["variables"],
-            json!({
-                "input": {
-                    "projectId": "project-id",
-                    "environmentId": "environment-id",
-                    "serviceId": "service-id",
-                }
-            })
-        );
-        let logs_request: Value = serde_json::from_slice(&requests[1].body).unwrap();
-        assert_eq!(
-            logs_request["variables"]["deploymentId"],
-            "successful-deployment"
-        );
-        assert_eq!(logs_request["variables"]["limit"], 101);
+        assert_eq!(requests.len(), 1);
+        let logs_request: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(logs_request["variables"]["environmentId"], "environment-id");
+        assert_eq!(logs_request["variables"]["beforeLimit"], 101);
+        assert_eq!(logs_request["variables"]["afterLimit"], 0);
         assert_eq!(
             logs_request["variables"]["filter"],
-            "@level:error AND timeout"
+            "@service:service-id AND (@level:error OR timeout)"
         );
-        let start_date = logs_request["variables"]["startDate"]
+        let start_date = logs_request["variables"]["beforeDate"]
             .as_str()
             .unwrap()
             .parse::<chrono::DateTime<Utc>>()
             .unwrap();
         let age = Utc::now() - start_date;
         assert!(age >= TimeDelta::minutes(59) && age <= TimeDelta::minutes(61));
+        assert_eq!(
+            logs_request["variables"]["anchorDate"],
+            logs_request["variables"]["afterDate"]
+        );
+        let end_date = logs_request["variables"]["anchorDate"]
+            .as_str()
+            .unwrap()
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
+        let age = Utc::now() - end_date;
+        assert!(age >= TimeDelta::zero() && age <= TimeDelta::minutes(1));
     }
 
     #[tokio::test]
