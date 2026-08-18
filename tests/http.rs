@@ -45,18 +45,18 @@ async fn queries_grafana_with_configured_credentials_and_bounds_output() {
         .await;
 
     let directory = tempfile::tempdir().unwrap();
-    let config_path = directory.path().join(".ctx.yaml");
+    let config_path = directory.path().join(".ctx.toml");
     fs::write(
         &config_path,
         format!(
-            r#"projects:
-  api:
-    backends:
-      - name: production
-        type: victoria_logs
-        url: {}
-        datasource_uid: victoria-logs
-        token_env: {token_env}
+            r#"[projects.api]
+
+[[projects.api.backends]]
+name = "production"
+type = "victoria_logs"
+url = "{}"
+datasource_uid = "victoria-logs"
+token_env = "{token_env}"
 "#,
             server.uri()
         ),

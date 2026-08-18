@@ -26,39 +26,39 @@ reporting are planned follow-up work.
 
 ## Configuration
 
-Projects and their backends are declared in a repository-local `.ctx.yaml` file.
+Projects and their backends are declared in a repository-local `.ctx.toml` file.
 Credentials are supplied through environment variables referenced by that file.
 
-```yaml
-projects:
-  api:
-    backends:
-      - name: production
-        type: victoria_logs
-        url: https://grafana.example.com
-        datasource_uid: victoria-logs
-        token_env: GRAFANA_TOKEN
+```toml
+[projects.api]
+
+[[projects.api.backends]]
+name = "production"
+type = "victoria_logs"
+url = "https://grafana.example.com"
+datasource_uid = "victoria-logs"
+token_env = "GRAFANA_TOKEN"
 ```
 
 Railway deployment logs can be configured with stable project, environment,
 and service IDs. `ctx` resolves the latest successful deployment on each query,
 falling back to the latest deployment when none succeeded.
 
-```yaml
-projects:
-  api:
-    backends:
-      - name: railway-production
-        type: railway
-        project_id: 00000000-0000-0000-0000-000000000000
-        environment_id: 00000000-0000-0000-0000-000000000000
-        service_id: 00000000-0000-0000-0000-000000000000
-        token_env: RAILWAY_TOKEN
-        auth: project_token
+```toml
+[projects.api]
+
+[[projects.api.backends]]
+name = "railway-production"
+type = "railway"
+project_id = "00000000-0000-0000-0000-000000000000"
+environment_id = "00000000-0000-0000-0000-000000000000"
+service_id = "00000000-0000-0000-0000-000000000000"
+token_env = "RAILWAY_TOKEN"
+auth = "project_token"
 ```
 
-Use `auth: project_token` for Railway project tokens, which are sent with the
-`Project-Access-Token` header. Use `auth: bearer` for account or workspace
+Use `auth = "project_token"` for Railway project tokens, which are sent with the
+`Project-Access-Token` header. Use `auth = "bearer"` for account or workspace
 tokens. Railway queries use its [log filter syntax](https://docs.railway.com/observability/logs).
 
 The current implementation requires exactly one VictoriaLogs or Railway

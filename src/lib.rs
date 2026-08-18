@@ -62,8 +62,7 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-        serde_yaml::from_str(&contents)
-            .wrap_err_with(|| format!("failed to parse {}", path.display()))
+        toml::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
     }
 }
 
@@ -476,17 +475,17 @@ mod tests {
 
     #[test]
     fn parses_railway_backend_config() {
-        let config: Config = serde_yaml::from_str(
-            r#"projects:
-  api:
-    backends:
-      - name: railway-production
-        type: railway
-        project_id: project-id
-        environment_id: environment-id
-        service_id: service-id
-        token_env: RAILWAY_TOKEN
-        auth: project_token
+        let config: Config = toml::from_str(
+            r#"[projects.api]
+
+[[projects.api.backends]]
+name = "railway-production"
+type = "railway"
+project_id = "project-id"
+environment_id = "environment-id"
+service_id = "service-id"
+token_env = "RAILWAY_TOKEN"
+auth = "project_token"
 "#,
         )
         .unwrap();

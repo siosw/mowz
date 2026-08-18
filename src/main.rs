@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
         bail!("usage: ctx <project> <query>");
     };
 
-    let config = ctx::Config::load(Path::new(".ctx.yaml"))?;
+    let config = ctx::Config::load(Path::new(".ctx.toml"))?;
     let output = ctx::query_project(&config, &project, &query, &reqwest::Client::new()).await?;
     serde_json::to_writer(io::stdout().lock(), &output)?;
     println!();
