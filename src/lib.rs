@@ -1,5 +1,6 @@
 mod grafana;
 mod railway;
+mod time_range;
 
 use std::{collections::BTreeMap, env, fs, path::Path};
 
@@ -8,37 +9,9 @@ use railway::{RailwayAuth, RailwayScope};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Map, Value};
+pub use time_range::TimeRange;
 
 const RESULT_LIMIT: usize = 100;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TimeRange {
-    from: String,
-    to: String,
-}
-
-impl TimeRange {
-    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
-        Self {
-            from: from.into(),
-            to: to.into(),
-        }
-    }
-
-    pub(crate) fn from(&self) -> &str {
-        &self.from
-    }
-
-    pub(crate) fn to(&self) -> &str {
-        &self.to
-    }
-}
-
-impl Default for TimeRange {
-    fn default() -> Self {
-        Self::new("now-1h", "now")
-    }
-}
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
