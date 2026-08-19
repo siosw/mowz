@@ -270,8 +270,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let (entries, truncated) = bound_entries(extract_entries(&response), true);
-        assert!(truncated);
+        let entries = bound_entries(extract_entries(&response), true);
         assert_eq!(entries.len(), 100);
         assert_eq!(entries[0]["message"], "line 1");
         assert_eq!(entries[0]["serviceId"], "service-id");

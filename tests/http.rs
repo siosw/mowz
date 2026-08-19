@@ -1,18 +1,15 @@
-use std::{env, fs};
+use std::{fs, process::Command};
 
-use ctx::{Config, query_project};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, header, method, path},
 };
 
 #[tokio::test]
-async fn queries_grafana_with_configured_credentials_and_bounds_output() {
+async fn cli_emits_bounded_grafana_logs_as_ndjson() {
     let server = MockServer::start().await;
     let token_env = "CTX_TEST_GRAFANA_TOKEN_HTTP_SLICE";
-    // This test is the only environment-mutating test in the suite.
-    unsafe { env::set_var(token_env, "secret-token") };
 
     let times = (0..101)
         .map(|second| format!("2026-08-18T12:00:{:02}Z", second % 60))
@@ -53,7 +50,6 @@ async fn queries_grafana_with_configured_credentials_and_bounds_output() {
             r#"[projects.api]
 
 [[projects.api.backends]]
-name = "production"
 type = "victoria_logs"
 url = "{}"
 datasource_uid = "victoria-logs"
@@ -65,28 +61,29 @@ scope_filter = "_stream:{{environment=\"production\"}}"
     )
     .unwrap();
 
-    let config = Config::load(&config_path).unwrap();
-    let output = query_project(
-        &config,
-        "api",
-        "_stream:{app=\"api\"}",
-        &reqwest::Client::new(),
-    )
-    .await
-    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ctx"))
+        .args(["api", "_stream:{app=\"api\"}"])
+        .current_dir(directory.path())
+        .env(token_env, "secret-token")
+        .output()
+        .unwrap();
 
-    let output = serde_json::to_value(output).unwrap();
-    assert_eq!(output["results"][0]["backend"], "production");
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert!(output.stdout.ends_with(b"\n"));
+
+    let lines = output.stdout[..output.stdout.len() - 1].split(|byte| *byte == b'\n');
+    let entries = lines
+        .map(|line| serde_json::from_slice::<Map<String, Value>>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 100);
     assert_eq!(
-        output["results"][0]["entries"].as_array().unwrap().len(),
-        100
-    );
-    assert_eq!(
-        output["results"][0]["entries"][0],
+        Value::Object(entries[0].clone()),
         json!({"Time": "2026-08-18T12:00:00Z", "Line": "line 0"})
     );
-    assert_eq!(output["errors"], json!([]));
-    assert_eq!(output["truncated"], true);
-
-    unsafe { env::remove_var(token_env) };
+    assert!(entries.iter().all(|entry| {
+        !entry.contains_key("backend")
+            && !entry.contains_key("errors")
+            && !entry.contains_key("truncated")
+    }));
 }

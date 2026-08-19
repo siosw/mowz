@@ -1,4 +1,8 @@
-use std::{env, io, path::Path};
+use std::{
+    env,
+    io::{self, Write},
+    path::Path,
+};
 
 use eyre::{Result, bail};
 
@@ -10,8 +14,11 @@ async fn main() -> Result<()> {
     };
 
     let config = ctx::Config::load(Path::new(".ctx.toml"))?;
-    let output = ctx::query_project(&config, &project, &query, &reqwest::Client::new()).await?;
-    serde_json::to_writer(io::stdout().lock(), &output)?;
-    println!();
+    let entries = ctx::query_project(&config, &project, &query, &reqwest::Client::new()).await?;
+    let mut stdout = io::stdout().lock();
+    for entry in entries {
+        serde_json::to_writer(&mut stdout, &entry)?;
+        writeln!(stdout)?;
+    }
     Ok(())
 }

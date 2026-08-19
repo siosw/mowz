@@ -7,9 +7,9 @@ It provides one command for searching logs across a project's configured backend
 
 - Minimize tokens returned to agents without hiding relevant failures.
 - Query every backend configured for a named project.
-- Return predictable, compact JSON suitable for programmatic consumption.
+- Return predictable NDJSON suitable for programmatic consumption.
 - Bound responses with a default time window, hard result limit, selected fields,
-  truncation, and deduplication.
+  and deduplication.
 - Keep backend credentials out of project configuration.
 - Add metrics and traces after the logs workflow is proven.
 
@@ -21,7 +21,9 @@ ctx <project> <query>
 
 The query is sent unchanged to VictoriaLogs and environment-scoped Railway
 backends. Service-scoped Railway backends add their configured service filter.
-Results are attributed to their backend and emitted as compact JSON only.
+Each result is emitted as one compact JSON log object per line (NDJSON).
+Backend, error, and truncation metadata are omitted; query and configuration
+failures are reported as normal command errors instead of NDJSON records.
 The first slice supports one backend; independent fan-out and partial failure
 reporting are planned follow-up work.
 
@@ -34,7 +36,6 @@ Credentials are supplied through environment variables referenced by that file.
 [projects.api]
 
 [[projects.api.backends]]
-name = "production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
@@ -63,7 +64,6 @@ is shown below for clarity. The user's filter is combined with a fixed
 [projects.api]
 
 [[projects.api.backends]]
-name = "railway-production"
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "service"
@@ -80,7 +80,6 @@ ID.
 [projects.api]
 
 [[projects.api.backends]]
-name = "railway-production"
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "environment"

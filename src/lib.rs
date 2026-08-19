@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, env, fs, path::Path};
 use eyre::{Context, Result, bail};
 use railway::{RailwayAuth, RailwayScope};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 const RESULT_LIMIT: usize = 100;
@@ -25,14 +25,12 @@ struct Project {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Backend {
     VictoriaLogs {
-        name: String,
         url: String,
         datasource_uid: String,
         token_env: String,
         scope_filter: Option<String>,
     },
     Railway {
-        name: String,
         environment_id: String,
         #[serde(default)]
         scope: RailwayScope,
@@ -40,19 +38,6 @@ enum Backend {
         token_env: String,
         auth: RailwayAuth,
     },
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-pub struct Output {
-    results: Vec<BackendResult>,
-    errors: Vec<Value>,
-    truncated: bool,
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-struct BackendResult {
-    backend: String,
-    entries: Vec<Map<String, Value>>,
 }
 
 impl Config {
@@ -68,7 +53,7 @@ pub async fn query_project(
     project_name: &str,
     query: &str,
     client: &Client,
-) -> Result<Output> {
+) -> Result<Vec<Map<String, Value>>> {
     let project = config
         .projects
         .get(project_name)
@@ -81,9 +66,8 @@ pub async fn query_project(
         );
     }
 
-    let (name, entries, truncated) = match &project.backends[0] {
+    let entries = match &project.backends[0] {
         Backend::VictoriaLogs {
-            name,
             url,
             datasource_uid,
             token_env,
@@ -99,11 +83,9 @@ pub async fn query_project(
                 scope_filter.as_deref(),
             )
             .await?;
-            let (entries, truncated) = bound_entries(grafana::extract_entries(&response), false);
-            (name, entries, truncated)
+            bound_entries(grafana::extract_entries(&response), false)
         }
         Backend::Railway {
-            name,
             environment_id,
             scope,
             service_id,
@@ -114,19 +96,11 @@ pub async fn query_project(
             let token = read_token(token_env)?;
             let response =
                 railway::query_logs(client, &token, *auth, environment_id, &filter).await?;
-            let (entries, truncated) = bound_entries(railway::extract_entries(&response), true);
-            (name, entries, truncated)
+            bound_entries(railway::extract_entries(&response), true)
         }
     };
 
-    Ok(Output {
-        results: vec![BackendResult {
-            backend: name.clone(),
-            entries,
-        }],
-        errors: Vec::new(),
-        truncated,
-    })
+    Ok(entries)
 }
 
 fn read_token(token_env: &str) -> Result<String> {
@@ -141,14 +115,13 @@ fn read_token(token_env: &str) -> Result<String> {
 fn bound_entries(
     mut entries: Vec<Map<String, Value>>,
     retain_newest: bool,
-) -> (Vec<Map<String, Value>>, bool) {
-    let truncated = entries.len() > RESULT_LIMIT;
-    if truncated && retain_newest {
+) -> Vec<Map<String, Value>> {
+    if entries.len() > RESULT_LIMIT && retain_newest {
         entries.drain(..entries.len() - RESULT_LIMIT);
     } else {
         entries.truncate(RESULT_LIMIT);
     }
-    (entries, truncated)
+    entries
 }
 
 #[cfg(test)]
@@ -175,14 +148,12 @@ auth = "project_token"
         assert!(matches!(
             &config.projects["api"].backends[0],
             Backend::Railway {
-                name,
                 environment_id,
                 scope: RailwayScope::Service,
                 service_id,
                 token_env,
                 auth: RailwayAuth::ProjectToken,
-            } if name == "railway-production"
-                && environment_id == "environment-id"
+            } if environment_id == "environment-id"
                 && service_id.as_deref() == Some("service-id")
                 && token_env == "RAILWAY_TOKEN"
         ));
