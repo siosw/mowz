@@ -30,8 +30,8 @@ async fn cli_emits_bounded_grafana_logs_as_ndjson() {
                 "queryType": "range",
                 "maxLines": 101,
             }],
-            "from": "now-1h",
-            "to": "now",
+            "from": "now-6h",
+            "to": "now-30m",
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": { "A": { "frames": [{
@@ -62,7 +62,14 @@ scope_filter = "_stream:{{environment=\"production\"}}"
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
-        .args(["api", "_stream:{app=\"api\"}"])
+        .args([
+            "--from",
+            "now-6h",
+            "--to",
+            "now-30m",
+            "api",
+            "_stream:{app=\"api\"}",
+        ])
         .current_dir(directory.path())
         .env(token_env, "secret-token")
         .output()

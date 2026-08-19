@@ -1,10 +1,10 @@
-use chrono::{SecondsFormat, TimeDelta, Utc};
-use eyre::{Context, Result, bail};
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use eyre::{Context, ContextCompat, Result, bail};
 use reqwest::{Client, header::CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::RESULT_LIMIT;
+use crate::{RESULT_LIMIT, TimeRange};
 
 const API_URL: &str = "https://backboard.railway.com/graphql/v2";
 
@@ -49,8 +49,18 @@ pub(crate) async fn query_logs(
     auth: RailwayAuth,
     environment_id: &str,
     filter: &str,
+    time_range: &TimeRange,
 ) -> Result<Value> {
-    query_logs_at(client, API_URL, token, auth, environment_id, filter).await
+    query_logs_at(
+        client,
+        API_URL,
+        token,
+        auth,
+        environment_id,
+        filter,
+        time_range,
+    )
+    .await
 }
 
 async fn query_logs_at(
@@ -60,6 +70,7 @@ async fn query_logs_at(
     auth: RailwayAuth,
     environment_id: &str,
     filter: &str,
+    time_range: &TimeRange,
 ) -> Result<Value> {
     let query = r#"query EnvironmentLogs($environmentId: String!, $filter: String, $beforeDate: String!, $anchorDate: String!, $afterDate: String!, $beforeLimit: Int!, $afterLimit: Int!) {
   environmentLogs(environmentId: $environmentId, filter: $filter, beforeDate: $beforeDate, anchorDate: $anchorDate, afterDate: $afterDate, beforeLimit: $beforeLimit, afterLimit: $afterLimit) {
@@ -72,9 +83,9 @@ async fn query_logs_at(
     }
   }
 }"#;
-    let now = Utc::now();
-    let start_date = (now - TimeDelta::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    let end_date = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let (start_date, end_date) = resolve_time_range(time_range, Utc::now())?;
+    let start_date = start_date.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let end_date = end_date.to_rfc3339_opts(SecondsFormat::Secs, true);
 
     query_api(
         client,
@@ -93,6 +104,59 @@ async fn query_logs_at(
         }),
     )
     .await
+}
+
+fn resolve_time_range(
+    time_range: &TimeRange,
+    now: DateTime<Utc>,
+) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    let from = parse_time(time_range.from(), now)
+        .wrap_err_with(|| format!("invalid --from value {:?} for Railway", time_range.from()))?;
+    let to = parse_time(time_range.to(), now)
+        .wrap_err_with(|| format!("invalid --to value {:?} for Railway", time_range.to()))?;
+    if from > to {
+        bail!("--from must not be later than --to");
+    }
+    Ok((from, to))
+}
+
+fn parse_time(value: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    if value == "now" {
+        return Ok(now);
+    }
+
+    if let Some((sign, offset)) = value
+        .strip_prefix("now-")
+        .map(|offset| (-1, offset))
+        .or_else(|| value.strip_prefix("now+").map(|offset| (1, offset)))
+    {
+        let (amount, unit) = offset.split_at(offset.len().saturating_sub(1));
+        let amount = amount
+            .parse::<i64>()
+            .context("relative time must contain a positive whole number")?;
+        if amount <= 0 {
+            bail!("relative time must contain a positive whole number");
+        }
+        let seconds_per_unit = match unit {
+            "s" => 1,
+            "m" => 60,
+            "h" => 60 * 60,
+            "d" => 24 * 60 * 60,
+            "w" => 7 * 24 * 60 * 60,
+            _ => bail!("relative time unit must be one of s, m, h, d, or w"),
+        };
+        let seconds = amount
+            .checked_mul(seconds_per_unit)
+            .context("relative time is too large")?;
+        let delta = TimeDelta::try_seconds(seconds).context("relative time is too large")?;
+        return now
+            .checked_add_signed(delta * sign)
+            .context("relative time is out of range");
+    }
+
+    value
+        .parse::<DateTime<Utc>>()
+        .context("expected now, now-<duration>, now+<duration>, or an RFC 3339 timestamp")
 }
 
 async fn query_api(
@@ -232,6 +296,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolves_relative_and_absolute_railway_times() {
+        let now = "2026-08-19T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+
+        assert_eq!(
+            resolve_time_range(&TimeRange::new("now-6h", "now-30m"), now).unwrap(),
+            (
+                "2026-08-19T06:00:00Z".parse().unwrap(),
+                "2026-08-19T11:30:00Z".parse().unwrap(),
+            )
+        );
+        assert_eq!(
+            resolve_time_range(
+                &TimeRange::new("2026-08-18T12:00:00Z", "2026-08-19T12:00:00Z"),
+                now,
+            )
+            .unwrap(),
+            (
+                "2026-08-18T12:00:00Z".parse().unwrap(),
+                "2026-08-19T12:00:00Z".parse().unwrap(),
+            )
+        );
+        assert_eq!(
+            resolve_time_range(&TimeRange::new("now", "now-1h"), now)
+                .unwrap_err()
+                .to_string(),
+            "--from must not be later than --to"
+        );
+    }
+
     #[tokio::test]
     async fn queries_bounded_railway_environment_logs() {
         let server = MockServer::start().await;
@@ -267,6 +361,7 @@ mod tests {
             RailwayAuth::ProjectToken,
             "environment-id",
             "@service:service-id AND (@level:error OR timeout)",
+            &TimeRange::new("now-6h", "now-30m"),
         )
         .await
         .unwrap();
@@ -293,7 +388,7 @@ mod tests {
             .parse::<chrono::DateTime<Utc>>()
             .unwrap();
         let age = Utc::now() - start_date;
-        assert!(age >= TimeDelta::minutes(59) && age <= TimeDelta::minutes(61));
+        assert!(age >= TimeDelta::minutes(359) && age <= TimeDelta::minutes(361));
         assert_eq!(
             logs_request["variables"]["anchorDate"],
             logs_request["variables"]["afterDate"]
@@ -304,7 +399,7 @@ mod tests {
             .parse::<chrono::DateTime<Utc>>()
             .unwrap();
         let age = Utc::now() - end_date;
-        assert!(age >= TimeDelta::zero() && age <= TimeDelta::minutes(1));
+        assert!(age >= TimeDelta::minutes(29) && age <= TimeDelta::minutes(31));
     }
 
     #[tokio::test]

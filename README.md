@@ -16,11 +16,15 @@ It provides one command for searching logs across a project's configured backend
 ## Usage
 
 ```sh
-mowz <project> <query>
+mowz [--from <time>] [--to <time>] <project> <query>
 ```
 
 The query is sent unchanged to VictoriaLogs and environment-scoped Railway
 backends. Service-scoped Railway backends add their configured service filter.
+The time window defaults to `--from now-1h --to now`. Relative values use
+Grafana-style syntax such as `now-6h`; seconds (`s`), minutes (`m`), hours
+(`h`), days (`d`), and weeks (`w`) are supported. Railway also accepts RFC 3339
+timestamps, while VictoriaLogs time values are passed through to Grafana.
 Each result is emitted as one compact JSON log object per line (NDJSON).
 Backend, error, and truncation metadata are omitted; query and configuration
 failures are reported as normal command errors instead of NDJSON records.
@@ -94,8 +98,7 @@ Returned Railway entries include `serviceId` and `deploymentId` when Railway
 supplies those source tags.
 
 The current implementation requires exactly one VictoriaLogs or Railway
-backend for the selected project. It queries the last hour and emits at most
-100 entries.
+backend for the selected project. It emits at most 100 entries.
 
 Backend support:
 
