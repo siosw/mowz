@@ -49,7 +49,7 @@ async fn cli_emits_bounded_grafana_logs_as_ndjson() {
         format!(
             r#"[projects.api]
 
-[[projects.api.backends]]
+[projects.api.backend]
 type = "victoria_logs"
 url = "{}"
 datasource_uid = "victoria-logs"

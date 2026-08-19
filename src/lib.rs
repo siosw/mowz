@@ -20,7 +20,7 @@ pub struct Config {
 
 #[derive(Debug, Deserialize)]
 struct Project {
-    backends: Vec<Backend>,
+    backend: Backend,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,14 +62,7 @@ pub async fn query_project(
         .get(project_name)
         .ok_or_else(|| eyre::eyre!("project {project_name:?} is not configured"))?;
 
-    if project.backends.len() != 1 {
-        bail!(
-            "project {project_name:?} must configure exactly one backend (found {})",
-            project.backends.len()
-        );
-    }
-
-    let entries = match &project.backends[0] {
+    let entries = match &project.backend {
         Backend::VictoriaLogs {
             url,
             datasource_uid,
@@ -138,7 +131,7 @@ mod tests {
         let config: Config = toml::from_str(
             r#"[projects.api]
 
-[[projects.api.backends]]
+[projects.api.backend]
 name = "railway-production"
 type = "railway"
 project_id = "project-id"
@@ -151,7 +144,7 @@ auth = "project_token"
         .unwrap();
 
         assert!(matches!(
-            &config.projects["api"].backends[0],
+            &config.projects["api"].backend,
             Backend::Railway {
                 environment_id,
                 scope: RailwayScope::Service,
@@ -169,7 +162,7 @@ auth = "project_token"
         let config: Config = toml::from_str(
             r#"[projects.scoped]
 
-[[projects.scoped.backends]]
+[projects.scoped.backend]
 name = "scoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
@@ -179,7 +172,7 @@ scope_filter = "_stream:{environment=\"production\"}"
 
 [projects.unscoped]
 
-[[projects.unscoped.backends]]
+[projects.unscoped.backend]
 name = "unscoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
@@ -190,14 +183,14 @@ token_env = "GRAFANA_TOKEN"
         .unwrap();
 
         assert!(matches!(
-            &config.projects["scoped"].backends[0],
+            &config.projects["scoped"].backend,
             Backend::VictoriaLogs {
                 scope_filter: Some(scope_filter),
                 ..
             } if scope_filter == "_stream:{environment=\"production\"}"
         ));
         assert!(matches!(
-            &config.projects["unscoped"].backends[0],
+            &config.projects["unscoped"].backend,
             Backend::VictoriaLogs {
                 scope_filter: None,
                 ..
@@ -210,7 +203,7 @@ token_env = "GRAFANA_TOKEN"
         let config: Config = toml::from_str(
             r#"[projects.api]
 
-[[projects.api.backends]]
+[projects.api.backend]
 name = "railway-production"
 type = "railway"
 environment_id = "environment-id"
@@ -222,7 +215,7 @@ auth = "bearer"
         .unwrap();
 
         assert!(matches!(
-            &config.projects["api"].backends[0],
+            &config.projects["api"].backend,
             Backend::Railway {
                 environment_id,
                 scope: RailwayScope::Environment,
@@ -231,5 +224,22 @@ auth = "bearer"
                 ..
             } if environment_id == "environment-id"
         ));
+    }
+
+    #[test]
+    fn rejects_backend_arrays() {
+        let result = toml::from_str::<Config>(
+            r#"[projects.api]
+
+[[projects.api.backends]]
+type = "railway"
+environment_id = "environment-id"
+scope = "environment"
+token_env = "RAILWAY_TOKEN"
+auth = "project_token"
+"#,
+        );
+
+        assert!(result.is_err());
     }
 }
