@@ -1,6 +1,6 @@
-# ctx
+# mowz
 
-`ctx` is a token-efficient CLI for agents querying production context.
+`mowz` is a token-efficient CLI for agents querying production context.
 It provides one command for searching logs across a project's configured backends.
 
 ## Goals
@@ -16,7 +16,7 @@ It provides one command for searching logs across a project's configured backend
 ## Usage
 
 ```sh
-ctx <project> <query>
+mowz <project> <query>
 ```
 
 The query is sent unchanged to VictoriaLogs and environment-scoped Railway
@@ -29,7 +29,7 @@ reporting are planned follow-up work.
 
 ## Configuration
 
-Projects and their backends are declared in a repository-local `.ctx.toml` file.
+Projects and their backends are declared in a repository-local `.mowz.toml` file.
 Credentials are supplied through environment variables referenced by that file.
 
 ```toml
@@ -43,14 +43,14 @@ token_env = "GRAFANA_TOKEN"
 scope_filter = "_stream:{environment=\"production\"}"
 ```
 
-`scope_filter` is optional. When set, `ctx` sends it through the VictoriaLogs
+`scope_filter` is optional. When set, `mowz` sends it through the VictoriaLogs
 Grafana query model as `extraFilters`, which the datasource applies using
 VictoriaLogs `extra_filters` semantics. The user's LogsQL expression remains
 unchanged and separate from this fixed filter. This requires VictoriaLogs
 Grafana datasource plugin v0.18.1 or later.
 
 The scope filter is an application safety boundary that limits queries made
-through `ctx`; it is not credential-level authorization. Use credentials and
+through `mowz`; it is not credential-level authorization. Use credentials and
 backend access controls with an appropriate least-privilege scope when a user
 must not be able to bypass this application.
 
@@ -113,5 +113,5 @@ Backend support:
 
 ## Distribution
 
-`ctx` is implemented in Rust and released with cargo-dist installers for
+`mowz` is implemented in Rust and released with cargo-dist installers for
 Homebrew and shell installation.

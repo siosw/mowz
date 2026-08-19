@@ -10,11 +10,11 @@ use eyre::{Result, bail};
 async fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let (Some(project), Some(query), None) = (args.next(), args.next(), args.next()) else {
-        bail!("usage: ctx <project> <query>");
+        bail!("usage: mowz <project> <query>");
     };
 
-    let config = ctx::Config::load(Path::new(".ctx.toml"))?;
-    let entries = ctx::query_project(&config, &project, &query, &reqwest::Client::new()).await?;
+    let config = mowz::Config::load(Path::new(".mowz.toml"))?;
+    let entries = mowz::query_project(&config, &project, &query, &reqwest::Client::new()).await?;
     let mut stdout = io::stdout().lock();
     for entry in entries {
         serde_json::to_writer(&mut stdout, &entry)?;

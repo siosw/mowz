@@ -31,11 +31,11 @@ fi
 source "$HOME/.cargo/env"
 rustup toolchain install stable --profile minimal --component clippy --component rustfmt
 
-profile_marker="# ctx Rust toolchain"
+profile_marker="# mowz Rust toolchain"
 if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
   cat >>"$HOME/.bash_profile" <<'EOF'
 
-# ctx Rust toolchain
+# mowz Rust toolchain
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 EOF
 fi

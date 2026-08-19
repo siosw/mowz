@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-printf '[%s] No services need to be resumed for ctx.\n' "$(date -u +%H:%M:%S)"
+printf '[%s] No services need to be resumed for mowz.\n' "$(date -u +%H:%M:%S)"

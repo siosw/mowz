@@ -9,7 +9,7 @@ use wiremock::{
 #[tokio::test]
 async fn cli_emits_bounded_grafana_logs_as_ndjson() {
     let server = MockServer::start().await;
-    let token_env = "CTX_TEST_GRAFANA_TOKEN_HTTP_SLICE";
+    let token_env = "MOWZ_TEST_GRAFANA_TOKEN_HTTP_SLICE";
 
     let times = (0..101)
         .map(|second| format!("2026-08-18T12:00:{:02}Z", second % 60))
@@ -43,7 +43,7 @@ async fn cli_emits_bounded_grafana_logs_as_ndjson() {
         .await;
 
     let directory = tempfile::tempdir().unwrap();
-    let config_path = directory.path().join(".ctx.toml");
+    let config_path = directory.path().join(".mowz.toml");
     fs::write(
         &config_path,
         format!(
@@ -61,7 +61,7 @@ scope_filter = "_stream:{{environment=\"production\"}}"
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ctx"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
         .args(["api", "_stream:{app=\"api\"}"])
         .current_dir(directory.path())
         .env(token_env, "secret-token")
