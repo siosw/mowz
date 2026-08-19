@@ -2,7 +2,7 @@ use eyre::{Context, Result, bail};
 use reqwest::{Client, header::CONTENT_TYPE};
 use serde_json::{Map, Value, json};
 
-use crate::RESULT_LIMIT;
+use crate::{RESULT_LIMIT, TimeRange};
 
 pub(crate) async fn query(
     client: &Client,
@@ -11,6 +11,7 @@ pub(crate) async fn query(
     token: &str,
     query: &str,
     scope_filter: Option<&str>,
+    time_range: &TimeRange,
 ) -> Result<Value> {
     let endpoint = format!("{}/api/ds/query", grafana_url.trim_end_matches('/'));
     let mut query_model = json!({
@@ -25,8 +26,8 @@ pub(crate) async fn query(
     }
     let payload = json!({
         "queries": [query_model],
-        "from": "now-1h",
-        "to": "now",
+        "from": time_range.from(),
+        "to": time_range.to(),
     });
 
     let response = client

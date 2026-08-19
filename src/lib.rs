@@ -11,6 +11,35 @@ use serde_json::{Map, Value};
 
 const RESULT_LIMIT: usize = 100;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimeRange {
+    from: String,
+    to: String,
+}
+
+impl TimeRange {
+    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    pub(crate) fn from(&self) -> &str {
+        &self.from
+    }
+
+    pub(crate) fn to(&self) -> &str {
+        &self.to
+    }
+}
+
+impl Default for TimeRange {
+    fn default() -> Self {
+        Self::new("now-1h", "now")
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     projects: BTreeMap<String, Project>,
@@ -52,6 +81,7 @@ pub async fn query_project(
     config: &Config,
     project_name: &str,
     query: &str,
+    time_range: &TimeRange,
     client: &Client,
 ) -> Result<Vec<Map<String, Value>>> {
     let project = config
@@ -81,6 +111,7 @@ pub async fn query_project(
                 &token,
                 query,
                 scope_filter.as_deref(),
+                time_range,
             )
             .await?;
             bound_entries(grafana::extract_entries(&response), false)
@@ -95,7 +126,8 @@ pub async fn query_project(
             let filter = scope.filter(service_id.as_deref(), query)?;
             let token = read_token(token_env)?;
             let response =
-                railway::query_logs(client, &token, *auth, environment_id, &filter).await?;
+                railway::query_logs(client, &token, *auth, environment_id, &filter, time_range)
+                    .await?;
             bound_entries(railway::extract_entries(&response), true)
         }
     };

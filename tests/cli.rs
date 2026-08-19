@@ -9,7 +9,10 @@ fn cli_prints_help() {
 
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: mowz <PROJECT> <QUERY>"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Usage: mowz [OPTIONS] <PROJECT> <QUERY>"));
+    assert!(stdout.contains("--from <FROM>"));
+    assert!(stdout.contains("--to <TO>"));
 }
 
 #[test]
@@ -34,6 +37,6 @@ fn cli_rejects_the_wrong_number_of_arguments() {
 
         assert!(!output.status.success(), "{output:?}");
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage: mowz <PROJECT> <QUERY>"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("<PROJECT> <QUERY>"));
     }
 }
