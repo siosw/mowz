@@ -28,7 +28,7 @@ async fn cli_emits_bounded_grafana_logs_as_ndjson() {
                 "expr": "_stream:{app=\"api\"}",
                 "extraFilters": "_stream:{environment=\"production\"}",
                 "queryType": "range",
-                "maxLines": 101,
+                "maxLines": 100,
             }],
             "from": "now-6h",
             "to": "now-30m",
@@ -66,6 +66,8 @@ scope_filter = "_stream:{{environment=\"production\"}}"
             "now-6h",
             "--to",
             "now-30m",
+            "--limit",
+            "100",
             "api",
             "_stream:{app=\"api\"}",
         ])
@@ -92,4 +94,70 @@ scope_filter = "_stream:{{environment=\"production\"}}"
             && !entry.contains_key("errors")
             && !entry.contains_key("truncated")
     }));
+}
+
+#[tokio::test]
+async fn cli_defaults_to_three_rows() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/ds/query"))
+        .and(header("authorization", "Bearer secret-token"))
+        .and(body_json(json!({
+            "queries": [{
+                "refId": "A",
+                "datasource": { "uid": "victoria-logs" },
+                "expr": "error",
+                "queryType": "range",
+                "maxLines": 3,
+            }],
+            "from": "now-1h",
+            "to": "now",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": { "A": { "frames": [{
+                "schema": { "fields": [{"name": "Line"}] },
+                "data": { "values": [["line 0", "line 1", "line 2", "line 3"]] }
+            }] } }
+        })))
+        .mount(&server)
+        .await;
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join(".mowz.toml"),
+        format!(
+            r#"[projects.api]
+type = "victoria_logs"
+url = "{}"
+datasource_uid = "victoria-logs"
+token = "secret-token"
+"#,
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+        .args(["query", "api", "error"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let entries = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        vec![
+            json!({"Line": "line 0"}),
+            json!({"Line": "line 1"}),
+            json!({"Line": "line 2"}),
+        ]
+    );
 }

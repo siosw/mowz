@@ -4,7 +4,7 @@ use reqwest::{Client, header::CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::{RESULT_LIMIT, TimeRange, diagnostic_body};
+use crate::{TimeRange, diagnostic_body};
 
 const API_URL: &str = "https://backboard.railway.com/graphql/v2";
 
@@ -50,6 +50,7 @@ pub(crate) async fn query_logs(
     environment_id: &str,
     filter: &str,
     time_range: &TimeRange,
+    limit: usize,
 ) -> Result<Value> {
     query_logs_at(
         client,
@@ -59,6 +60,7 @@ pub(crate) async fn query_logs(
         environment_id,
         filter,
         time_range,
+        limit,
     )
     .await
 }
@@ -71,6 +73,7 @@ async fn query_logs_at(
     environment_id: &str,
     filter: &str,
     time_range: &TimeRange,
+    limit: usize,
 ) -> Result<Value> {
     let query = r#"query EnvironmentLogs($environmentId: String!, $filter: String, $beforeDate: String!, $anchorDate: String!, $afterDate: String!, $beforeLimit: Int!, $afterLimit: Int!) {
   environmentLogs(environmentId: $environmentId, filter: $filter, beforeDate: $beforeDate, anchorDate: $anchorDate, afterDate: $afterDate, beforeLimit: $beforeLimit, afterLimit: $afterLimit) {
@@ -99,7 +102,7 @@ async fn query_logs_at(
             "beforeDate": start_date,
             "anchorDate": end_date,
             "afterDate": end_date,
-            "beforeLimit": RESULT_LIMIT + 1,
+            "beforeLimit": limit,
             "afterLimit": 0,
         }),
     )
@@ -284,10 +287,11 @@ mod tests {
             "environment-id",
             "@service:service-id AND (@level:error OR timeout)",
             &TimeRange::new("now-6h", "now-30m"),
+            100,
         )
         .await
         .unwrap();
-        let entries = bound_entries(extract_entries(&response), true);
+        let entries = bound_entries(extract_entries(&response), true, 100);
         assert_eq!(entries.len(), 100);
         assert_eq!(entries[0]["message"], "line 1");
         assert_eq!(entries[0]["serviceId"], "service-id");
@@ -298,7 +302,7 @@ mod tests {
         assert_eq!(requests.len(), 1);
         let logs_request: Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(logs_request["variables"]["environmentId"], "environment-id");
-        assert_eq!(logs_request["variables"]["beforeLimit"], 101);
+        assert_eq!(logs_request["variables"]["beforeLimit"], 100);
         assert_eq!(logs_request["variables"]["afterLimit"], 0);
         assert_eq!(
             logs_request["variables"]["filter"],

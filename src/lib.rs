@@ -13,9 +13,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 pub use time_range::TimeRange;
 
-const RESULT_LIMIT: usize = 100;
 const DIAGNOSTIC_BODY_LIMIT: usize = 1024;
 const TRUNCATION_MARKER: &str = "... [truncated]";
+pub const MAX_RESULT_LIMIT: usize = 100;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -69,8 +69,13 @@ pub async fn query_project(
     project_name: &str,
     query: &str,
     time_range: &TimeRange,
+    limit: usize,
     client: &Client,
 ) -> Result<Vec<Map<String, Value>>> {
+    if !(1..=MAX_RESULT_LIMIT).contains(&limit) {
+        bail!("limit must be between 1 and {MAX_RESULT_LIMIT}");
+    }
+
     let backend = config
         .projects
         .get(project_name)
@@ -101,9 +106,10 @@ pub async fn query_project(
                 query,
                 scope_filter.as_deref(),
                 time_range,
+                limit,
             )
             .await?;
-            bound_entries(grafana::extract_entries(&response), false)
+            bound_entries(grafana::extract_entries(&response), false, limit)
         }
         Backend::Railway {
             environment_id,
@@ -122,10 +128,17 @@ pub async fn query_project(
                 .wrap_err("failed to resolve `service_id`")?;
             let filter = scope.filter(service_id.as_deref(), query)?;
             let token = read_token(token)?;
-            let response =
-                railway::query_logs(client, &token, *auth, &environment_id, &filter, time_range)
-                    .await?;
-            bound_entries(railway::extract_entries(&response), true)
+            let response = railway::query_logs(
+                client,
+                &token,
+                *auth,
+                &environment_id,
+                &filter,
+                time_range,
+                limit,
+            )
+            .await?;
+            bound_entries(railway::extract_entries(&response), true, limit)
         }
     };
 
@@ -143,11 +156,12 @@ fn read_token(value: &StringValue) -> Result<String> {
 fn bound_entries(
     mut entries: Vec<Map<String, Value>>,
     retain_newest: bool,
+    limit: usize,
 ) -> Vec<Map<String, Value>> {
-    if entries.len() > RESULT_LIMIT && retain_newest {
-        entries.drain(..entries.len() - RESULT_LIMIT);
+    if entries.len() > limit && retain_newest {
+        entries.drain(..entries.len() - limit);
     } else {
-        entries.truncate(RESULT_LIMIT);
+        entries.truncate(limit);
     }
     entries
 }
