@@ -51,7 +51,7 @@ async fn cli_emits_bounded_grafana_logs_as_ndjson() {
 type = "victoria_logs"
 url = "{}"
 datasource_uid = "victoria-logs"
-token_env = "{token_env}"
+token = {{ env = "{token_env}" }}
 scope_filter = "_stream:{{environment=\"production\"}}"
 "#,
             server.uri()
