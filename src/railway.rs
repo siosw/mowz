@@ -4,7 +4,7 @@ use reqwest::{Client, header::CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::{RESULT_LIMIT, TimeRange, diagnostic_body};
+use crate::{QueryOptions, diagnostic_body};
 
 const API_URL: &str = "https://backboard.railway.com/graphql/v2";
 
@@ -49,7 +49,7 @@ pub(crate) async fn query_logs(
     auth: RailwayAuth,
     environment_id: &str,
     filter: &str,
-    time_range: &TimeRange,
+    options: &QueryOptions<'_>,
 ) -> Result<Value> {
     query_logs_at(
         client,
@@ -58,7 +58,7 @@ pub(crate) async fn query_logs(
         auth,
         environment_id,
         filter,
-        time_range,
+        options,
     )
     .await
 }
@@ -70,7 +70,7 @@ async fn query_logs_at(
     auth: RailwayAuth,
     environment_id: &str,
     filter: &str,
-    time_range: &TimeRange,
+    options: &QueryOptions<'_>,
 ) -> Result<Value> {
     let query = r#"query EnvironmentLogs($environmentId: String!, $filter: String, $beforeDate: String!, $anchorDate: String!, $afterDate: String!, $beforeLimit: Int!, $afterLimit: Int!) {
   environmentLogs(environmentId: $environmentId, filter: $filter, beforeDate: $beforeDate, anchorDate: $anchorDate, afterDate: $afterDate, beforeLimit: $beforeLimit, afterLimit: $afterLimit) {
@@ -83,7 +83,7 @@ async fn query_logs_at(
     }
   }
 }"#;
-    let (start_date, end_date) = time_range.resolve(Utc::now())?;
+    let (start_date, end_date) = options.time_range.resolve(Utc::now())?;
     let start_date = start_date.to_rfc3339_opts(SecondsFormat::Secs, true);
     let end_date = end_date.to_rfc3339_opts(SecondsFormat::Secs, true);
 
@@ -99,7 +99,7 @@ async fn query_logs_at(
             "beforeDate": start_date,
             "anchorDate": end_date,
             "afterDate": end_date,
-            "beforeLimit": RESULT_LIMIT + 1,
+            "beforeLimit": options.limit,
             "afterLimit": 0,
         }),
     )
@@ -194,6 +194,7 @@ pub(crate) fn extract_entries(response: &Value) -> Vec<Map<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TimeRange;
     use crate::bound_entries;
     use chrono::TimeDelta;
     use wiremock::{
@@ -276,6 +277,7 @@ mod tests {
 
         let api_url = format!("{}/graphql/v2", server.uri());
         let client = Client::new();
+        let time_range = TimeRange::new("now-6h", "now-30m");
         let response = query_logs_at(
             &client,
             &api_url,
@@ -283,11 +285,14 @@ mod tests {
             RailwayAuth::ProjectToken,
             "environment-id",
             "@service:service-id AND (@level:error OR timeout)",
-            &TimeRange::new("now-6h", "now-30m"),
+            &QueryOptions {
+                time_range: &time_range,
+                limit: 100,
+            },
         )
         .await
         .unwrap();
-        let entries = bound_entries(extract_entries(&response), true);
+        let entries = bound_entries(extract_entries(&response), true, 100);
         assert_eq!(entries.len(), 100);
         assert_eq!(entries[0]["message"], "line 1");
         assert_eq!(entries[0]["serviceId"], "service-id");
@@ -298,7 +303,7 @@ mod tests {
         assert_eq!(requests.len(), 1);
         let logs_request: Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(logs_request["variables"]["environmentId"], "environment-id");
-        assert_eq!(logs_request["variables"]["beforeLimit"], 101);
+        assert_eq!(logs_request["variables"]["beforeLimit"], 100);
         assert_eq!(logs_request["variables"]["afterLimit"], 0);
         assert_eq!(
             logs_request["variables"]["filter"],

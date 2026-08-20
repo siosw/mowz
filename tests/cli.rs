@@ -29,6 +29,8 @@ fn query_prints_help() {
     assert!(stdout.contains("Usage: mowz query [OPTIONS] <PROJECT> <QUERY>"));
     assert!(stdout.contains("--from <FROM>"));
     assert!(stdout.contains("--to <TO>"));
+    assert!(stdout.contains("--limit <LIMIT>"));
+    assert!(stdout.contains("[default: 3]"));
 }
 
 #[test]
@@ -123,4 +125,18 @@ token = { env = "MOWZ_TEST_MISSING_GRAFANA_TOKEN" }
         "{\"project\":\"api\",\"backend\":\"victoria_logs\"}\n\
 {\"project\":\"worker\",\"backend\":\"railway\"}\n"
     );
+}
+
+#[test]
+fn cli_rejects_limits_outside_the_supported_range() {
+    for limit in ["0", "101"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+            .args(["query", "--limit", limit, "api", "query"])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid value"));
+    }
 }

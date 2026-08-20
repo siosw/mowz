@@ -32,10 +32,29 @@ struct QueryArgs {
     from: String,
     #[arg(long, default_value = "now")]
     to: String,
+    #[arg(
+        long,
+        default_value_t = 3,
+        value_parser = parse_limit
+    )]
+    limit: usize,
     #[arg(allow_hyphen_values = true)]
     project: String,
     #[arg(allow_hyphen_values = true)]
     query: String,
+}
+
+fn parse_limit(value: &str) -> Result<usize, String> {
+    let limit = value
+        .parse::<usize>()
+        .map_err(|_| format!("limit must be between 1 and {}", mowz::MAX_RESULT_LIMIT))?;
+    if !(1..=mowz::MAX_RESULT_LIMIT).contains(&limit) {
+        return Err(format!(
+            "limit must be between 1 and {}",
+            mowz::MAX_RESULT_LIMIT
+        ));
+    }
+    Ok(limit)
 }
 
 #[tokio::main]
@@ -60,6 +79,7 @@ async fn query(args: QueryArgs) -> Result<()> {
         &args.project,
         &args.query,
         &time_range,
+        args.limit,
         &reqwest::Client::new(),
     )
     .await?;
@@ -85,4 +105,25 @@ fn projects() -> Result<()> {
         writeln!(stdout)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_result_limit() {
+        let default = Cli::try_parse_from(["mowz", "query", "api", "error"]).unwrap();
+        assert!(matches!(
+            default.command,
+            Command::Query(QueryArgs { limit: 3, .. })
+        ));
+
+        let overridden =
+            Cli::try_parse_from(["mowz", "query", "--limit", "25", "api", "error"]).unwrap();
+        assert!(matches!(
+            overridden.command,
+            Command::Query(QueryArgs { limit: 25, .. })
+        ));
+    }
 }

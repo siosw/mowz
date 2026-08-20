@@ -18,7 +18,7 @@ backend.
 ## Usage
 
 ```sh
-mowz query [--from <time>] [--to <time>] <project> <query>
+mowz query [--from <time>] [--to <time>] [--limit <rows>] <project> <query>
 ```
 
 The query is sent unchanged to VictoriaLogs and environment-scoped Railway
@@ -28,6 +28,8 @@ Grafana-style syntax such as `now-6h`; seconds (`s`), minutes (`m`), hours
 (`h`), days (`d`), and weeks (`w`) are supported. Railway also accepts RFC 3339
 timestamps, while VictoriaLogs time values are passed through to Grafana.
 Each result is emitted as one compact JSON log object per line (NDJSON).
+The result limit defaults to 3 rows and can be changed with `--limit`; accepted
+values are 1 through 100.
 Backend, error, and truncation metadata are omitted; query and configuration
 failures are reported as normal command errors instead of NDJSON records.
 Each project is configured with one backend.
@@ -147,8 +149,7 @@ tokens. Railway queries use its [log filter syntax](https://docs.railway.com/obs
 Returned Railway entries include `serviceId` and `deploymentId` when Railway
 supplies those source tags.
 
-Each project requires one VictoriaLogs or Railway backend. `mowz` emits at most
-100 entries.
+Each project requires one VictoriaLogs or Railway backend.
 
 Backend support:
 
