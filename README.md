@@ -17,7 +17,7 @@ It provides one command for searching logs in a project's configured backend.
 ## Usage
 
 ```sh
-mowz [--from <time>] [--to <time>] <project> <query>
+mowz query [--from <time>] [--to <time>] <project> <query>
 ```
 
 The query is sent unchanged to VictoriaLogs and environment-scoped Railway
@@ -30,6 +30,20 @@ Each result is emitted as one compact JSON log object per line (NDJSON).
 Backend, error, and truncation metadata are omitted; query and configuration
 failures are reported as normal command errors instead of NDJSON records.
 Each project is configured with one backend.
+
+List configured projects and their backends with:
+
+```sh
+mowz projects
+```
+
+The command emits one compact JSON object per project in name order, without
+resolving any backend configuration values or secrets:
+
+```json
+{"project":"api","backend":"victoria_logs"}
+{"project":"worker","backend":"railway"}
+```
 
 ## Configuration
 
