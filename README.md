@@ -1,7 +1,8 @@
 # mowz
 
 `mowz` is a token-efficient CLI for agents querying production context.
-It provides one command for searching logs in a project's configured backend.
+It provides a focused command for searching logs in a project's configured
+backend.
 
 ## Goals
 
@@ -79,11 +80,12 @@ interpreted as another environment variable or 1Password reference.
 
 The combined form lets the same committed `.mowz.toml` work in both settings:
 
-- **Local:** install and authenticate the 1Password `op` CLI, then run `mowz ...`.
-  If the environment variable is absent, `mowz` uses the 1Password fallback.
+- **Local:** install and authenticate the 1Password `op` CLI, then run
+  `mowz query ...`. If the environment variable is absent, `mowz` uses the
+  1Password fallback.
 - **Amp orb:** configure the named environment variable as an Amp project
-  secret, then run `mowz ...`. The environment value wins, so the orb does not
-  need the `op` CLI.
+  secret, then run `mowz query ...`. The environment value wins, so the orb
+  does not need the `op` CLI.
 
 Direct 1Password resolution requires `op` to be installed, authenticated, and
 able to access the configured reference. Literal values are checked into the
@@ -166,3 +168,15 @@ Backend support:
 
 `mowz` is implemented in Rust and released with cargo-dist installers for
 Homebrew and shell installation.
+
+The standard Agent Skill is distributed as
+[`skills/mowz/SKILL.md`](skills/mowz/SKILL.md) for skill managers to consume.
+The same hand-authored file is embedded in the binary and can be printed to
+standard output without loading configuration:
+
+```sh
+mowz skill
+```
+
+Installation and discovery paths are owned by the agent or skill manager; mowz
+does not install the skill itself.

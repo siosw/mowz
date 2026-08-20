@@ -11,8 +11,9 @@ fn cli_prints_help() {
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage: mowz <COMMAND>"));
-    assert!(stdout.contains("query"));
-    assert!(stdout.contains("projects"));
+    assert!(stdout.contains("Query a configured project's logs"));
+    assert!(stdout.contains("List configured projects"));
+    assert!(stdout.contains("Print the mowz Agent Skill"));
 }
 
 #[test]
@@ -28,6 +29,37 @@ fn query_prints_help() {
     assert!(stdout.contains("Usage: mowz query [OPTIONS] <PROJECT> <QUERY>"));
     assert!(stdout.contains("--from <FROM>"));
     assert!(stdout.contains("--to <TO>"));
+}
+
+#[test]
+fn cli_prints_the_standard_skill_without_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+        .arg("skill")
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout, include_bytes!("../skills/mowz/SKILL.md"));
+}
+
+#[test]
+fn query_accepts_skill_as_a_project_name() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join(".mowz.toml"), "[projects]\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+        .args(["query", "skill", "error"])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("project \"skill\" is not configured")
+    );
 }
 
 #[test]
