@@ -15,12 +15,7 @@ const RESULT_LIMIT: usize = 100;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    projects: BTreeMap<String, Project>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Project {
-    backend: Backend,
+    projects: BTreeMap<String, Backend>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,12 +52,12 @@ pub async fn query_project(
     time_range: &TimeRange,
     client: &Client,
 ) -> Result<Vec<Map<String, Value>>> {
-    let project = config
+    let backend = config
         .projects
         .get(project_name)
         .ok_or_else(|| eyre::eyre!("project {project_name:?} is not configured"))?;
 
-    let entries = match &project.backend {
+    let entries = match backend {
         Backend::VictoriaLogs {
             url,
             datasource_uid,
@@ -130,8 +125,6 @@ mod tests {
     fn parses_legacy_railway_service_config() {
         let config: Config = toml::from_str(
             r#"[projects.api]
-
-[projects.api.backend]
 name = "railway-production"
 type = "railway"
 project_id = "project-id"
@@ -144,7 +137,7 @@ auth = "project_token"
         .unwrap();
 
         assert!(matches!(
-            &config.projects["api"].backend,
+            &config.projects["api"],
             Backend::Railway {
                 environment_id,
                 scope: RailwayScope::Service,
@@ -161,8 +154,6 @@ auth = "project_token"
     fn parses_optional_victoria_logs_scope_filter() {
         let config: Config = toml::from_str(
             r#"[projects.scoped]
-
-[projects.scoped.backend]
 name = "scoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
@@ -171,8 +162,6 @@ token_env = "GRAFANA_TOKEN"
 scope_filter = "_stream:{environment=\"production\"}"
 
 [projects.unscoped]
-
-[projects.unscoped.backend]
 name = "unscoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
@@ -183,14 +172,14 @@ token_env = "GRAFANA_TOKEN"
         .unwrap();
 
         assert!(matches!(
-            &config.projects["scoped"].backend,
+            &config.projects["scoped"],
             Backend::VictoriaLogs {
                 scope_filter: Some(scope_filter),
                 ..
             } if scope_filter == "_stream:{environment=\"production\"}"
         ));
         assert!(matches!(
-            &config.projects["unscoped"].backend,
+            &config.projects["unscoped"],
             Backend::VictoriaLogs {
                 scope_filter: None,
                 ..
@@ -202,8 +191,6 @@ token_env = "GRAFANA_TOKEN"
     fn parses_explicit_railway_environment_config() {
         let config: Config = toml::from_str(
             r#"[projects.api]
-
-[projects.api.backend]
 name = "railway-production"
 type = "railway"
 environment_id = "environment-id"
@@ -215,7 +202,7 @@ auth = "bearer"
         .unwrap();
 
         assert!(matches!(
-            &config.projects["api"].backend,
+            &config.projects["api"],
             Backend::Railway {
                 environment_id,
                 scope: RailwayScope::Environment,
@@ -227,11 +214,11 @@ auth = "bearer"
     }
 
     #[test]
-    fn rejects_backend_arrays() {
+    fn rejects_nested_backend_config() {
         let result = toml::from_str::<Config>(
             r#"[projects.api]
 
-[[projects.api.backends]]
+[projects.api.backend]
 type = "railway"
 environment_id = "environment-id"
 scope = "environment"

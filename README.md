@@ -37,8 +37,6 @@ Credentials are supplied through environment variables referenced by that file.
 
 ```toml
 [projects.api]
-
-[projects.api.backend]
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
@@ -65,8 +63,6 @@ is shown below for clarity. The user's filter is combined with a fixed
 
 ```toml
 [projects.api]
-
-[projects.api.backend]
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "service"
@@ -81,8 +77,6 @@ ID.
 
 ```toml
 [projects.api]
-
-[projects.api.backend]
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "environment"
