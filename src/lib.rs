@@ -17,6 +17,11 @@ const DIAGNOSTIC_BODY_LIMIT: usize = 1024;
 const TRUNCATION_MARKER: &str = "... [truncated]";
 pub const MAX_RESULT_LIMIT: usize = 100;
 
+struct QueryOptions<'a> {
+    time_range: &'a TimeRange,
+    limit: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     projects: BTreeMap<String, Backend>,
@@ -75,6 +80,7 @@ pub async fn query_project(
     if !(1..=MAX_RESULT_LIMIT).contains(&limit) {
         bail!("limit must be between 1 and {MAX_RESULT_LIMIT}");
     }
+    let options = QueryOptions { time_range, limit };
 
     let backend = config
         .projects
@@ -105,8 +111,7 @@ pub async fn query_project(
                 &token,
                 query,
                 scope_filter.as_deref(),
-                time_range,
-                limit,
+                &options,
             )
             .await?;
             bound_entries(grafana::extract_entries(&response), false, limit)
@@ -128,16 +133,9 @@ pub async fn query_project(
                 .wrap_err("failed to resolve `service_id`")?;
             let filter = scope.filter(service_id.as_deref(), query)?;
             let token = read_token(token)?;
-            let response = railway::query_logs(
-                client,
-                &token,
-                *auth,
-                &environment_id,
-                &filter,
-                time_range,
-                limit,
-            )
-            .await?;
+            let response =
+                railway::query_logs(client, &token, *auth, &environment_id, &filter, &options)
+                    .await?;
             bound_entries(railway::extract_entries(&response), true, limit)
         }
     };

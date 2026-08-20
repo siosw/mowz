@@ -2,7 +2,7 @@ use eyre::{Context, Result, bail};
 use reqwest::{Client, header::CONTENT_TYPE};
 use serde_json::{Map, Value, json};
 
-use crate::{TimeRange, diagnostic_body};
+use crate::{QueryOptions, diagnostic_body};
 
 pub(crate) async fn query(
     client: &Client,
@@ -11,8 +11,7 @@ pub(crate) async fn query(
     token: &str,
     query: &str,
     scope_filter: Option<&str>,
-    time_range: &TimeRange,
-    limit: usize,
+    options: &QueryOptions<'_>,
 ) -> Result<Value> {
     let endpoint = format!("{}/api/ds/query", grafana_url.trim_end_matches('/'));
     let mut query_model = json!({
@@ -20,15 +19,15 @@ pub(crate) async fn query(
         "datasource": { "uid": datasource_uid },
         "expr": query,
         "queryType": "range",
-        "maxLines": limit,
+        "maxLines": options.limit,
     });
     if let Some(scope_filter) = scope_filter {
         query_model["extraFilters"] = json!(scope_filter);
     }
     let payload = json!({
         "queries": [query_model],
-        "from": time_range.from(),
-        "to": time_range.to(),
+        "from": options.time_range.from(),
+        "to": options.time_range.to(),
     });
 
     let response = client
@@ -129,6 +128,7 @@ fn extract_frame_entries(frame: &Value) -> Vec<Map<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TimeRange;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -150,6 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_errors_do_not_expose_the_grafana_url() {
+        let time_range = TimeRange::default();
         let error = query(
             &Client::new(),
             "http://127.0.0.1:0/sentinel-secret",
@@ -157,8 +158,10 @@ mod tests {
             "token",
             "query",
             None,
-            &TimeRange::default(),
-            3,
+            &QueryOptions {
+                time_range: &time_range,
+                limit: 3,
+            },
         )
         .await
         .unwrap_err();
