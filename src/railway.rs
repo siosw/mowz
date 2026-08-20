@@ -4,7 +4,7 @@ use reqwest::{Client, header::CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::{RESULT_LIMIT, TimeRange};
+use crate::{RESULT_LIMIT, TimeRange, diagnostic_body};
 
 const API_URL: &str = "https://backboard.railway.com/graphql/v2";
 
@@ -133,7 +133,10 @@ async fn query_api(
         .await
         .context("failed to read Railway response body")?;
     if !status.is_success() {
-        bail!("Railway query failed with status {status}: {body}");
+        bail!(
+            "Railway query failed with status {status}: {}",
+            diagnostic_body(&body)
+        );
     }
 
     let response: Value =
@@ -143,9 +146,10 @@ async fn query_api(
         .and_then(Value::as_array)
         .is_some_and(|errors| !errors.is_empty())
     {
+        let errors = response["errors"].to_string();
         bail!(
             "Railway query returned GraphQL errors: {}",
-            response["errors"]
+            diagnostic_body(&errors)
         );
     }
     Ok(response)
@@ -323,11 +327,12 @@ mod tests {
     #[tokio::test]
     async fn reports_railway_graphql_errors() {
         let server = MockServer::start().await;
+        let message = format!("not authorized: {}sentinel tail", "x".repeat(2048));
         Mock::given(method("POST"))
             .and(path("/graphql/v2"))
             .and(header("authorization", "Bearer secret-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "errors": [{ "message": "not authorized" }]
+                "errors": [{ "message": message }]
             })))
             .mount(&server)
             .await;
@@ -343,10 +348,38 @@ mod tests {
         .await
         .unwrap_err();
 
+        let error = error.to_string();
         assert!(
-            error
-                .to_string()
-                .contains("Railway query returned GraphQL errors")
+            error.contains("Railway query returned GraphQL errors: [{\"message\":\"not authorized")
         );
+        assert!(error.ends_with("... [truncated]"));
+        assert!(!error.contains("sentinel tail"));
+    }
+
+    #[tokio::test]
+    async fn bounds_railway_error_response_bodies() {
+        let server = MockServer::start().await;
+        let body = format!("useful beginning: {}sentinel tail", "x".repeat(2048));
+        Mock::given(method("POST"))
+            .and(path("/graphql/v2"))
+            .respond_with(ResponseTemplate::new(503).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let error = query_api(
+            &Client::new(),
+            &format!("{}/graphql/v2", server.uri()),
+            "secret-token",
+            RailwayAuth::Bearer,
+            "query Test { me { id } }",
+            json!({}),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("status 503 Service Unavailable: useful beginning"));
+        assert!(error.ends_with("... [truncated]"));
+        assert!(!error.contains("sentinel tail"));
     }
 }
