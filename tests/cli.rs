@@ -128,6 +128,36 @@ token = { env = "MOWZ_TEST_MISSING_GRAFANA_TOKEN" }
 }
 
 #[test]
+fn projects_discovers_config_in_parent_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let child = directory.path().join("project").join("src");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(
+        directory.path().join(".mowz.toml"),
+        r#"[projects.api]
+type = "victoria_logs"
+url = "https://grafana.example.com"
+datasource_uid = "victoria-logs"
+token = "unused"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+        .arg("projects")
+        .current_dir(child)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "{\"project\":\"api\",\"backend\":\"victoria_logs\"}\n"
+    );
+}
+
+#[test]
 fn cli_rejects_limits_outside_the_supported_range() {
     for limit in ["0", "101"] {
         let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
