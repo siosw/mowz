@@ -9,8 +9,7 @@ compatibility: Requires the mowz CLI, backend access, and jq for the processing 
 
 Use `mowz` to retrieve a small NDJSON slice from a named production project.
 Start narrow, inspect the result, then refine the time window or filter. A full
-100-entry result is a prompt to narrow the query, not proof that all matches were
-returned.
+result is a prompt to narrow the query, not proof that all matches were returned.
 
 ## Workflow
 
@@ -44,7 +43,8 @@ the query you provide.
 
 ## 2. Set the time window
 
-Use `--from` and `--to`. They default to `now-1h` and `now`.
+Use `--from` and `--to`. They default to `now-1h` and `now`. Results default to
+3 entries; use `--limit` to request between 1 and 100 when needed.
 
 ```sh
 mowz query --from now-15m --to now api '<backend query>'
@@ -53,9 +53,9 @@ mowz query --from now-15m --to now api '<backend query>'
 Relative times accept seconds (`s`), minutes (`m`), hours (`h`), days (`d`),
 and weeks (`w`). RFC 3339 timestamps are also accepted.
 
-Prefer the shortest window that could contain the event. `mowz` returns at most
-100 entries. If it returns 100, narrow the time window or add a selective
-backend filter before drawing conclusions.
+Prefer the shortest window that could contain the event. If `mowz` reaches the
+selected result limit, narrow the time window or add a selective backend filter
+before drawing conclusions.
 
 ## 3. Run the query
 
@@ -128,12 +128,12 @@ debugging secrets.
 
 - Do not mix Railway and LogsQL syntax.
 - Do not broaden a query before checking whether a narrower window is enough.
-- Do not treat a 100-entry result as complete.
+- Do not treat a result that reaches the selected limit as complete.
 - Do not parse stderr as NDJSON.
 - Do not expose literal, environment, or 1Password secret values.
 
 ## Report
 
 State the project, backend query, and time window used. Summarize what the
-returned entries show. Say when the 100-entry limit makes the conclusion
+returned entries show. Say when the selected limit makes the conclusion
 incomplete, and name the next narrower query when more evidence is needed.

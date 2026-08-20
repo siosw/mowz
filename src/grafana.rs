@@ -179,6 +179,7 @@ mod tests {
             .mount(&server)
             .await;
 
+        let time_range = TimeRange::default();
         let error = query(
             &Client::new(),
             &server.uri(),
@@ -186,7 +187,10 @@ mod tests {
             "token",
             "query",
             None,
-            &TimeRange::default(),
+            &QueryOptions {
+                time_range: &time_range,
+                limit: 3,
+            },
         )
         .await
         .unwrap_err()
