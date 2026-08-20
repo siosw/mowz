@@ -1,9 +1,11 @@
+mod config_value;
 mod grafana;
 mod railway;
 mod time_range;
 
-use std::{collections::BTreeMap, env, fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
+use config_value::StringValue;
 use eyre::{Context, Result, bail};
 use railway::{RailwayAuth, RailwayScope};
 use reqwest::Client;
@@ -22,17 +24,17 @@ pub struct Config {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Backend {
     VictoriaLogs {
-        url: String,
-        datasource_uid: String,
-        token_env: String,
-        scope_filter: Option<String>,
+        url: StringValue,
+        datasource_uid: StringValue,
+        token: StringValue,
+        scope_filter: Option<StringValue>,
     },
     Railway {
-        environment_id: String,
+        environment_id: StringValue,
         #[serde(default)]
         scope: RailwayScope,
-        service_id: Option<String>,
-        token_env: String,
+        service_id: Option<StringValue>,
+        token: StringValue,
         auth: RailwayAuth,
     },
 }
@@ -61,14 +63,23 @@ pub async fn query_project(
         Backend::VictoriaLogs {
             url,
             datasource_uid,
-            token_env,
+            token,
             scope_filter,
         } => {
-            let token = read_token(token_env)?;
+            let url = url.resolve().wrap_err("failed to resolve `url`")?;
+            let datasource_uid = datasource_uid
+                .resolve()
+                .wrap_err("failed to resolve `datasource_uid`")?;
+            let token = read_token(token)?;
+            let scope_filter = scope_filter
+                .as_ref()
+                .map(StringValue::resolve)
+                .transpose()
+                .wrap_err("failed to resolve `scope_filter`")?;
             let response = grafana::query(
                 client,
-                url,
-                datasource_uid,
+                &url,
+                &datasource_uid,
                 &token,
                 query,
                 scope_filter.as_deref(),
@@ -81,13 +92,21 @@ pub async fn query_project(
             environment_id,
             scope,
             service_id,
-            token_env,
+            token,
             auth,
         } => {
+            let environment_id = environment_id
+                .resolve()
+                .wrap_err("failed to resolve `environment_id`")?;
+            let service_id = service_id
+                .as_ref()
+                .map(StringValue::resolve)
+                .transpose()
+                .wrap_err("failed to resolve `service_id`")?;
             let filter = scope.filter(service_id.as_deref(), query)?;
-            let token = read_token(token_env)?;
+            let token = read_token(token)?;
             let response =
-                railway::query_logs(client, &token, *auth, environment_id, &filter, time_range)
+                railway::query_logs(client, &token, *auth, &environment_id, &filter, time_range)
                     .await?;
             bound_entries(railway::extract_entries(&response), true)
         }
@@ -96,11 +115,10 @@ pub async fn query_project(
     Ok(entries)
 }
 
-fn read_token(token_env: &str) -> Result<String> {
-    let token = env::var(token_env)
-        .wrap_err_with(|| format!("environment variable {token_env} is not set"))?;
+fn read_token(value: &StringValue) -> Result<String> {
+    let token = value.resolve().wrap_err("failed to resolve `token`")?;
     if token.is_empty() {
-        bail!("environment variable {token_env} is empty");
+        bail!("configured token resolved to an empty value");
     }
     Ok(token)
 }
@@ -122,7 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_legacy_railway_service_config() {
+    fn parses_railway_service_config() {
         let config: Config = toml::from_str(
             r#"[projects.api]
 name = "railway-production"
@@ -130,7 +148,7 @@ type = "railway"
 project_id = "project-id"
 environment_id = "environment-id"
 service_id = "service-id"
-token_env = "RAILWAY_TOKEN"
+token = { env = "RAILWAY_TOKEN" }
 auth = "project_token"
 "#,
         )
@@ -142,11 +160,10 @@ auth = "project_token"
                 environment_id,
                 scope: RailwayScope::Service,
                 service_id,
-                token_env,
+                token: StringValue::Source(_),
                 auth: RailwayAuth::ProjectToken,
-            } if environment_id == "environment-id"
-                && service_id.as_deref() == Some("service-id")
-                && token_env == "RAILWAY_TOKEN"
+            } if matches!(environment_id, StringValue::Literal(value) if value == "environment-id")
+                && matches!(service_id, Some(StringValue::Literal(value)) if value == "service-id")
         ));
     }
 
@@ -158,7 +175,7 @@ name = "scoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
-token_env = "GRAFANA_TOKEN"
+token = { env = "GRAFANA_TOKEN" }
 scope_filter = "_stream:{environment=\"production\"}"
 
 [projects.unscoped]
@@ -166,7 +183,7 @@ name = "unscoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
-token_env = "GRAFANA_TOKEN"
+token = { env = "GRAFANA_TOKEN" }
 "#,
         )
         .unwrap();
@@ -174,7 +191,7 @@ token_env = "GRAFANA_TOKEN"
         assert!(matches!(
             &config.projects["scoped"],
             Backend::VictoriaLogs {
-                scope_filter: Some(scope_filter),
+                scope_filter: Some(StringValue::Literal(scope_filter)),
                 ..
             } if scope_filter == "_stream:{environment=\"production\"}"
         ));
@@ -195,7 +212,7 @@ name = "railway-production"
 type = "railway"
 environment_id = "environment-id"
 scope = "environment"
-token_env = "RAILWAY_TOKEN"
+token = { env = "RAILWAY_TOKEN" }
 auth = "bearer"
 "#,
         )
@@ -209,7 +226,17 @@ auth = "bearer"
                 service_id: None,
                 auth: RailwayAuth::Bearer,
                 ..
-            } if environment_id == "environment-id"
+            } if matches!(environment_id, StringValue::Literal(value) if value == "environment-id")
         ));
+    }
+
+    #[test]
+    fn rejects_empty_resolved_token() {
+        let error = read_token(&StringValue::Literal(String::new())).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "configured token resolved to an empty value"
+        );
     }
 }

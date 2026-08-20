@@ -10,7 +10,8 @@ It provides one command for searching logs in a project's configured backend.
 - Return predictable NDJSON suitable for programmatic consumption.
 - Bound responses with a default time window, hard result limit, selected fields,
   and deduplication.
-- Keep backend credentials out of project configuration.
+- Let projects choose which configuration values are checked in and which are
+  resolved from secrets.
 - Add metrics and traces after the logs workflow is proven.
 
 ## Usage
@@ -33,14 +34,54 @@ Each project is configured with one backend.
 ## Configuration
 
 Projects and their backend are declared in a repository-local `.mowz.toml` file.
-Credentials are supplied through environment variables referenced by that file.
+Every string-valued backend field accepts either a literal string or a secret
+source. Ordinary strings remain literal and are not reinterpreted:
+
+```toml
+url = "https://grafana.example.com"
+```
+
+Secret sources can use the environment, 1Password, or both (these are
+alternative definitions of the same field):
+
+```toml
+token = { env = "GRAFANA_TOKEN" }
+```
+
+```toml
+token = { op = "op://production/grafana/token" }
+```
+
+```toml
+token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
+```
+
+For a source containing both `env` and `op`, `mowz` reads the environment
+variable first. It runs `op read --no-newline <reference>` only when that
+variable is missing. An environment variable that is present but empty is not
+treated as missing; for `token`, the existing empty-token validation rejects
+the result. Resolved values are always used literally and are never recursively
+interpreted as another environment variable or 1Password reference.
+
+The combined form lets the same committed `.mowz.toml` work in both settings:
+
+- **Local:** install and authenticate the 1Password `op` CLI, then run `mowz ...`.
+  If the environment variable is absent, `mowz` uses the 1Password fallback.
+- **Amp orb:** configure the named environment variable as an Amp project
+  secret, then run `mowz ...`. The environment value wins, so the orb does not
+  need the `op` CLI.
+
+Direct 1Password resolution requires `op` to be installed, authenticated, and
+able to access the configured reference. Literal values are checked into the
+configuration file, so do not use a literal for a value that must remain
+secret.
 
 ```toml
 [projects.api]
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
-token_env = "GRAFANA_TOKEN"
+token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
 scope_filter = "_stream:{environment=\"production\"}"
 ```
 
@@ -67,7 +108,7 @@ type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "service"
 service_id = "00000000-0000-0000-0000-000000000000"
-token_env = "RAILWAY_TOKEN"
+token = { env = "RAILWAY_TOKEN", op = "op://production/railway/token" }
 auth = "project_token"
 ```
 
@@ -80,7 +121,7 @@ ID.
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "environment"
-token_env = "RAILWAY_TOKEN"
+token = { env = "RAILWAY_TOKEN", op = "op://production/railway/token" }
 auth = "project_token"
 ```
 
