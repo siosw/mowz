@@ -1,12 +1,12 @@
 # mowz
 
 `mowz` is a token-efficient CLI for agents querying production context.
-It provides one command for searching logs across a project's configured backends.
+It provides one command for searching logs in a project's configured backend.
 
 ## Goals
 
 - Minimize tokens returned to agents without hiding relevant failures.
-- Query every backend configured for a named project.
+- Query the backend configured for a named project.
 - Return predictable NDJSON suitable for programmatic consumption.
 - Bound responses with a default time window, hard result limit, selected fields,
   and deduplication.
@@ -20,7 +20,7 @@ mowz [--from <time>] [--to <time>] <project> <query>
 ```
 
 The query is sent unchanged to VictoriaLogs and environment-scoped Railway
-backends. Service-scoped Railway backends add their configured service filter.
+backends. A service-scoped Railway backend adds its configured service filter.
 The time window defaults to `--from now-1h --to now`. Relative values use
 Grafana-style syntax such as `now-6h`; seconds (`s`), minutes (`m`), hours
 (`h`), days (`d`), and weeks (`w`) are supported. Railway also accepts RFC 3339
@@ -28,18 +28,15 @@ timestamps, while VictoriaLogs time values are passed through to Grafana.
 Each result is emitted as one compact JSON log object per line (NDJSON).
 Backend, error, and truncation metadata are omitted; query and configuration
 failures are reported as normal command errors instead of NDJSON records.
-The first slice supports one backend; independent fan-out and partial failure
-reporting are planned follow-up work.
+Each project is configured with one backend.
 
 ## Configuration
 
-Projects and their backends are declared in a repository-local `.mowz.toml` file.
+Projects and their backend are declared in a repository-local `.mowz.toml` file.
 Credentials are supplied through environment variables referenced by that file.
 
 ```toml
 [projects.api]
-
-[[projects.api.backends]]
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
@@ -66,8 +63,6 @@ is shown below for clarity. The user's filter is combined with a fixed
 
 ```toml
 [projects.api]
-
-[[projects.api.backends]]
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "service"
@@ -82,8 +77,6 @@ ID.
 
 ```toml
 [projects.api]
-
-[[projects.api.backends]]
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "environment"
@@ -97,8 +90,8 @@ tokens. Railway queries use its [log filter syntax](https://docs.railway.com/obs
 Returned Railway entries include `serviceId` and `deploymentId` when Railway
 supplies those source tags.
 
-The current implementation requires exactly one VictoriaLogs or Railway
-backend for the selected project. It emits at most 100 entries.
+Each project requires one VictoriaLogs or Railway backend. `mowz` emits at most
+100 entries.
 
 Backend support:
 
