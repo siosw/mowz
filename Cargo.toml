@@ -8,6 +8,11 @@ homepage = "https://github.com/siosw/mowz"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
