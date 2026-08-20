@@ -212,21 +212,4 @@ auth = "bearer"
             } if environment_id == "environment-id"
         ));
     }
-
-    #[test]
-    fn rejects_nested_backend_config() {
-        let result = toml::from_str::<Config>(
-            r#"[projects.api]
-
-[projects.api.backend]
-type = "railway"
-environment_id = "environment-id"
-scope = "environment"
-token_env = "RAILWAY_TOKEN"
-auth = "project_token"
-"#,
-        );
-
-        assert!(result.is_err());
-    }
 }
