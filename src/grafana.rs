@@ -2,7 +2,7 @@ use eyre::{Context, Result, bail};
 use reqwest::{Client, header::CONTENT_TYPE};
 use serde_json::{Map, Value, json};
 
-use crate::{RESULT_LIMIT, TimeRange};
+use crate::{RESULT_LIMIT, TimeRange, diagnostic_body};
 
 pub(crate) async fn query(
     client: &Client,
@@ -47,7 +47,10 @@ pub(crate) async fn query(
         .context("failed to read Grafana response body")?;
 
     if !status.is_success() {
-        bail!("Grafana query failed with status {status}: {body}");
+        bail!(
+            "Grafana query failed with status {status}: {}",
+            diagnostic_body(&body)
+        );
     }
 
     serde_json::from_str(&body).context("failed to parse Grafana response as JSON")
@@ -125,6 +128,10 @@ fn extract_frame_entries(frame: &Value) -> Vec<Map<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
 
     #[test]
     fn parses_grafana_frames_into_entries() {
@@ -155,5 +162,33 @@ mod tests {
         .unwrap_err();
 
         assert!(!format!("{error:?}").contains("sentinel-secret"));
+    }
+
+    #[tokio::test]
+    async fn bounds_grafana_error_response_bodies() {
+        let server = MockServer::start().await;
+        let body = format!("useful beginning: {}sentinel tail", "x".repeat(2048));
+        Mock::given(method("POST"))
+            .and(path("/api/ds/query"))
+            .respond_with(ResponseTemplate::new(502).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let error = query(
+            &Client::new(),
+            &server.uri(),
+            "victoria-logs",
+            "token",
+            "query",
+            None,
+            &TimeRange::default(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("status 502 Bad Gateway: useful beginning"));
+        assert!(error.ends_with("... [truncated]"));
+        assert!(!error.contains("sentinel tail"));
     }
 }

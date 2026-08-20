@@ -3,7 +3,7 @@ mod grafana;
 mod railway;
 mod time_range;
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{borrow::Cow, collections::BTreeMap, fs, path::Path};
 
 use config_value::StringValue;
 use eyre::{Context, Result, bail};
@@ -14,6 +14,8 @@ use serde_json::{Map, Value};
 pub use time_range::TimeRange;
 
 const RESULT_LIMIT: usize = 100;
+const DIAGNOSTIC_BODY_LIMIT: usize = 1024;
+const TRUNCATION_MARKER: &str = "... [truncated]";
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -135,6 +137,18 @@ fn bound_entries(
     entries
 }
 
+fn diagnostic_body(body: &str) -> Cow<'_, str> {
+    if body.len() <= DIAGNOSTIC_BODY_LIMIT {
+        return Cow::Borrowed(body);
+    }
+
+    let mut end = DIAGNOSTIC_BODY_LIMIT - TRUNCATION_MARKER.len();
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    Cow::Owned(format!("{}{TRUNCATION_MARKER}", &body[..end]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +247,16 @@ auth = "bearer"
             error.to_string(),
             "configured token resolved to an empty value"
         );
+    }
+
+    #[test]
+    fn bounds_diagnostic_bodies_at_utf8_boundaries() {
+        let body = format!("{}secret tail", "🦀".repeat(DIAGNOSTIC_BODY_LIMIT));
+
+        let diagnostic = diagnostic_body(&body);
+
+        assert!(diagnostic.len() <= DIAGNOSTIC_BODY_LIMIT);
+        assert!(diagnostic.ends_with(TRUNCATION_MARKER));
+        assert!(!diagnostic.contains("secret tail"));
     }
 }
