@@ -21,7 +21,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Backend {
     VictoriaLogs {
         url: StringValue,
@@ -143,9 +143,7 @@ mod tests {
     fn parses_railway_service_config() {
         let config: Config = toml::from_str(
             r#"[projects.api]
-name = "railway-production"
 type = "railway"
-project_id = "project-id"
 environment_id = "environment-id"
 service_id = "service-id"
 token = { env = "RAILWAY_TOKEN" }
@@ -171,7 +169,6 @@ auth = "project_token"
     fn parses_optional_victoria_logs_scope_filter() {
         let config: Config = toml::from_str(
             r#"[projects.scoped]
-name = "scoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
@@ -179,7 +176,6 @@ token = { env = "GRAFANA_TOKEN" }
 scope_filter = "_stream:{environment=\"production\"}"
 
 [projects.unscoped]
-name = "unscoped-production"
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
@@ -208,7 +204,6 @@ token = { env = "GRAFANA_TOKEN" }
     fn parses_explicit_railway_environment_config() {
         let config: Config = toml::from_str(
             r#"[projects.api]
-name = "railway-production"
 type = "railway"
 environment_id = "environment-id"
 scope = "environment"
