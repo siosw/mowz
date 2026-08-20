@@ -37,6 +37,7 @@ pub(crate) async fn query(
         .json(&payload)
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .context("failed to query Grafana")?;
 
     let status = response.status();
@@ -137,5 +138,22 @@ mod tests {
                 ("Time".to_owned(), json!("2026-08-18T12:00:00Z")),
             ])]
         );
+    }
+
+    #[tokio::test]
+    async fn transport_errors_do_not_expose_the_grafana_url() {
+        let error = query(
+            &Client::new(),
+            "http://127.0.0.1:0/sentinel-secret",
+            "victoria-logs",
+            "token",
+            "query",
+            None,
+            &TimeRange::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(!format!("{error:?}").contains("sentinel-secret"));
     }
 }

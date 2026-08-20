@@ -41,10 +41,14 @@ enum Backend {
 #[serde(untagged)]
 enum StringValue {
     Literal(String),
-    Source {
-        env: Option<String>,
-        op: Option<String>,
-    },
+    Source(StringSource),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StringSource {
+    env: Option<String>,
+    op: Option<String>,
 }
 
 impl StringValue {
@@ -59,7 +63,7 @@ impl StringValue {
     {
         match self {
             Self::Literal(value) => Ok(value.clone()),
-            Self::Source { env, op } => {
+            Self::Source(StringSource { env, op }) => {
                 if let Some(name) = env {
                     match read_env(name) {
                         Ok(value) => return Ok(value),
@@ -87,8 +91,7 @@ impl StringValue {
 }
 
 fn read_op(reference: &str) -> Result<String> {
-    let output = Command::new("op")
-        .args(["read", "--no-newline", reference])
+    let output = op_read_command(reference)
         .output()
         .wrap_err(
             "failed to run `op read`; install the 1Password CLI and authenticate it, or provide the configured environment variable",
@@ -102,6 +105,12 @@ fn read_op(reference: &str) -> Result<String> {
 
     String::from_utf8(output.stdout)
         .wrap_err("`op read` returned a configured value that is not valid UTF-8")
+}
+
+fn op_read_command(reference: &str) -> Command {
+    let mut command = Command::new("op");
+    command.args(["read", "--no-newline", reference]);
+    command
 }
 
 impl Config {
@@ -202,9 +211,11 @@ fn bound_entries(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
 
-    #[derive(Deserialize)]
+    #[derive(Debug, Deserialize)]
     struct TestValue {
         value: StringValue,
     }
@@ -230,7 +241,7 @@ auth = "project_token"
                 environment_id,
                 scope: RailwayScope::Service,
                 service_id,
-                token: StringValue::Source { env: Some(token_env), op: None },
+                token: StringValue::Source(StringSource { env: Some(token_env), op: None }),
                 auth: RailwayAuth::ProjectToken,
             } if matches!(environment_id, StringValue::Literal(value) if value == "environment-id")
                 && matches!(service_id, Some(StringValue::Literal(value)) if value == "service-id")
@@ -370,5 +381,94 @@ auth = "bearer"
             .unwrap();
 
         assert_eq!(resolved, "environment-secret");
+    }
+
+    #[test]
+    fn resolves_op_when_environment_is_missing() {
+        let value: TestValue = toml::from_str(
+            r#"value = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }"#,
+        )
+        .unwrap();
+
+        let resolved = value
+            .value
+            .resolve_with(
+                |_| Err(env::VarError::NotPresent),
+                |reference| {
+                    assert_eq!(reference, "op://production/grafana/token");
+                    Ok("one-password-secret".to_owned())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(resolved, "one-password-secret");
+    }
+
+    #[test]
+    fn does_not_fall_back_when_environment_is_empty() {
+        let value: TestValue = toml::from_str(
+            r#"value = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }"#,
+        )
+        .unwrap();
+
+        let resolved = value
+            .value
+            .resolve_with(
+                |_| Ok(String::new()),
+                |_| panic!("op fallback ran despite an empty environment value"),
+            )
+            .unwrap();
+
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn does_not_reinterpret_resolved_values() {
+        let value: TestValue = toml::from_str(r#"value = { env = "GRAFANA_TOKEN" }"#).unwrap();
+
+        let resolved = value
+            .value
+            .resolve_with(
+                |_| Ok("op://production/grafana/token".to_owned()),
+                |_| panic!("resolved environment value was reinterpreted"),
+            )
+            .unwrap();
+
+        assert_eq!(resolved, "op://production/grafana/token");
+    }
+
+    #[test]
+    fn rejects_empty_resolved_token() {
+        let error = read_token(&StringValue::Literal(String::new())).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "configured token resolved to an empty value"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_string_source_fields() {
+        let error = toml::from_str::<TestValue>(
+            r#"value = { env = "GRAFANA_TOKEN", opp = "op://production/grafana/token" }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("opp"), "{error}");
+    }
+
+    #[test]
+    fn builds_exact_op_read_command() {
+        let command = op_read_command("op://production/grafana/token");
+
+        assert_eq!(command.get_program(), OsStr::new("op"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("read"),
+                OsStr::new("--no-newline"),
+                OsStr::new("op://production/grafana/token"),
+            ]
+        );
     }
 }
