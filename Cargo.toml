@@ -2,6 +2,11 @@
 name = "mowz"
 version = "0.1.0"
 edition = "2024"
+description = "mowz retrieves production context"
+repository = "https://github.com/siosw/mowz"
+homepage = "https://github.com/siosw/mowz"
+readme = "README.md"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
