@@ -47,6 +47,21 @@ impl Config {
             .wrap_err_with(|| format!("failed to read {}", path.display()))?;
         toml::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
     }
+
+    pub fn projects(&self) -> impl Iterator<Item = (&str, &'static str)> {
+        self.projects
+            .iter()
+            .map(|(name, backend)| (name.as_str(), backend.name()))
+    }
+}
+
+impl Backend {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::VictoriaLogs { .. } => "victoria_logs",
+            Self::Railway { .. } => "railway",
+        }
+    }
 }
 
 pub async fn query_project(
@@ -258,5 +273,29 @@ auth = "bearer"
         assert!(diagnostic.len() <= DIAGNOSTIC_BODY_LIMIT);
         assert!(diagnostic.ends_with(TRUNCATION_MARKER));
         assert!(!diagnostic.contains("secret tail"));
+    }
+
+    #[test]
+    fn lists_projects_in_name_order_with_their_backends() {
+        let config: Config = toml::from_str(
+            r#"[projects.worker]
+type = "railway"
+environment_id = "environment-id"
+token = { env = "RAILWAY_TOKEN" }
+auth = "project_token"
+
+[projects.api]
+type = "victoria_logs"
+url = "https://grafana.example.com"
+datasource_uid = "victoria-logs"
+token = { env = "GRAFANA_TOKEN" }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.projects().collect::<Vec<_>>(),
+            [("api", "victoria_logs"), ("worker", "railway")]
+        );
     }
 }

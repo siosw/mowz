@@ -61,6 +61,7 @@ scope_filter = "_stream:{{environment=\"production\"}}"
 
     let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
         .args([
+            "query",
             "--from",
             "now-6h",
             "--to",
