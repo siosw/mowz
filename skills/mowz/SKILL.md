@@ -21,9 +21,11 @@ result is a prompt to narrow the query, not proof that all matches were returned
 
 ## 1. Select the project and query language
 
-Run `mowz` from the directory containing `.mowz.toml`. The current working
-directory is the configuration boundary; `mowz` does not search parent
-directories.
+Run `mowz` from the directory containing `.mowz.toml` or one of its descendants.
+Starting from the current directory, `mowz` searches upward and uses the nearest
+configuration. It does not merge configurations and stops before checking the
+home directory (or at the filesystem root when outside `$HOME` or `HOME` is
+unavailable).
 
 Read the selected `[projects.<name>]` entry before writing a query. The project
 name selects the backend, scope, and credentials.

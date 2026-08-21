@@ -1,7 +1,6 @@
-use std::{
-    io::{self, Write},
-    path::Path,
-};
+mod config_discovery;
+
+use std::io::{self, Write};
 
 use clap::{Args, Parser, Subcommand};
 use eyre::Result;
@@ -72,7 +71,7 @@ async fn main() -> Result<()> {
 }
 
 async fn query(args: QueryArgs) -> Result<()> {
-    let config = mowz::Config::load(Path::new(".mowz.toml"))?;
+    let config = config_discovery::load()?;
     let time_range = mowz::TimeRange::new(args.from, args.to);
     let entries = mowz::query_project(
         &config,
@@ -98,7 +97,7 @@ fn projects() -> Result<()> {
         backend: &'static str,
     }
 
-    let config = mowz::Config::load(Path::new(".mowz.toml"))?;
+    let config = config_discovery::load()?;
     let mut stdout = io::stdout().lock();
     for (project, backend) in config.projects() {
         serde_json::to_writer(&mut stdout, &Project { project, backend })?;
