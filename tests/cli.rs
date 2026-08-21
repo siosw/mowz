@@ -73,7 +73,10 @@ fn cli_prints_version() {
 
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "mowz 0.1.0\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("mowz {}\n", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
