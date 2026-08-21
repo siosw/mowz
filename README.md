@@ -53,8 +53,8 @@ resolving any backend configuration values or secrets:
 Projects and their backend are declared in a `.mowz.toml` file. Starting from
 the current directory, `mowz` searches parent directories and uses the nearest
 configuration it finds. It stops before checking the home directory, or at the
-filesystem root when the current directory is outside the home directory. It
-does not merge configurations.
+filesystem root when the current directory is outside `$HOME` or `HOME` is
+unavailable. It does not merge configurations.
 
 Every string-valued backend field accepts either a literal string or a secret
 source. Ordinary strings remain literal and are not reinterpreted:

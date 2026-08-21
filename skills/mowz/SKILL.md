@@ -24,7 +24,8 @@ result is a prompt to narrow the query, not proof that all matches were returned
 Run `mowz` from the directory containing `.mowz.toml` or one of its descendants.
 Starting from the current directory, `mowz` searches upward and uses the nearest
 configuration. It does not merge configurations and stops before checking the
-home directory (or at the filesystem root when outside the home directory).
+home directory (or at the filesystem root when outside `$HOME` or `HOME` is
+unavailable).
 
 Read the selected `[projects.<name>]` entry before writing a query. The project
 name selects the backend, scope, and credentials.

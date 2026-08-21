@@ -157,6 +157,31 @@ token = "unused"
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn projects_does_not_load_config_from_symlinked_home_boundary() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    let child = home.join("project");
+    let home_alias = directory.path().join("home-alias");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(home.join(".mowz.toml"), "[projects]\n").unwrap();
+    symlink(&home, &home_alias).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+        .arg("projects")
+        .current_dir(home_alias.join("project"))
+        .env("HOME", home_alias)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not find .mowz.toml"));
+}
+
 #[test]
 fn cli_rejects_limits_outside_the_supported_range() {
     for limit in ["0", "101"] {

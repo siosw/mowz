@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -9,10 +9,13 @@ const CONFIG_FILE: &str = ".mowz.toml";
 
 pub(crate) fn load() -> Result<mowz::Config> {
     let start = env::current_dir().wrap_err("failed to determine current directory")?;
+    let start = fs::canonicalize(&start)
+        .wrap_err_with(|| format!("failed to resolve current directory {}", start.display()))?;
     let home = env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
-        .filter(|home| home.is_absolute());
+        .filter(|home| home.is_absolute())
+        .and_then(|home| fs::canonicalize(home).ok());
     let path = find(&start, home.as_deref())?.ok_or_else(|| {
         eyre::eyre!(
             "could not find {CONFIG_FILE} from {} to the configuration boundary",
