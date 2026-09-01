@@ -1,199 +1,50 @@
 # mowz
 
-`mowz` is a token-efficient CLI for agents querying production context.
-It provides a focused command for searching logs in a project's configured
-backend.
+`mowz` gives coding agents a small, bounded NDJSON view of production logs instead of dumping broad searches into their context. It queries a named VictoriaLogs or Railway project with backend-native syntax; results default to the last hour and 3 rows (maximum 100).
 
-## Goals
-
-- Minimize tokens returned to agents without hiding relevant failures.
-- Query the backend configured for a named project.
-- Return predictable NDJSON suitable for programmatic consumption.
-- Bound responses with a default time window, hard result limit, selected fields,
-  and deduplication.
-- Let projects choose which configuration values are checked in and which are
-  resolved from secrets.
-- Add metrics and traces after the logs workflow is proven.
-
-## Usage
+## Install
 
 ```sh
-mowz query [--from <time>] [--to <time>] [--limit <rows>] <project> <query>
+brew install siosw/tap/mowz
+# macOS/Linux alternative:
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/siosw/mowz/releases/latest/download/mowz-installer.sh | sh
 ```
 
-The query is sent unchanged to VictoriaLogs and environment-scoped Railway
-backends. A service-scoped Railway backend adds its configured service filter.
-The time window defaults to `--from now-1h --to now`. Relative values use
-Grafana-style syntax such as `now-6h`; seconds (`s`), minutes (`m`), hours
-(`h`), days (`d`), and weeks (`w`) are supported. Railway also accepts RFC 3339
-timestamps, while VictoriaLogs time values are passed through to Grafana.
-Each result is emitted as one compact JSON log object per line (NDJSON).
-The result limit defaults to 3 rows and can be changed with `--limit`; accepted
-values are 1 through 100.
-Backend, error, and truncation metadata are omitted; query and configuration
-failures are reported as normal command errors instead of NDJSON records.
-Each project is configured with one backend.
+## Configure safely
 
-List configured projects and their backends with:
+Create `.mowz.toml` in the repository (mowz finds the nearest copy while walking up from the current directory). Keep tokens out of the file: use an environment variable as below, or an [`op://` 1Password reference](https://developer.1password.com/docs/cli/secret-references/). Give the token least-privilege backend access; fixed filters constrain mowz, but are not authorization boundaries.
 
-```sh
-mowz projects
-```
-
-The command emits one compact JSON object per project in name order, without
-resolving any backend configuration values or secrets:
-
-```json
-{"project":"api","backend":"victoria_logs"}
-{"project":"worker","backend":"railway"}
-```
-
-## Configuration
-
-Projects and their backend are declared in a `.mowz.toml` file. Starting from
-the current directory, `mowz` searches parent directories and uses the nearest
-configuration it finds. It stops before checking the home directory, or at the
-filesystem root when the current directory is outside `$HOME` or `HOME` is
-unavailable. It does not merge configurations.
-
-Every string-valued backend field accepts either a literal string or a secret
-source. Ordinary strings remain literal and are not reinterpreted:
-
-```toml
-url = "https://grafana.example.com"
-```
-
-Secret sources can use the environment, 1Password, or both (these are
-alternative definitions of the same field):
-
-```toml
-token = { env = "GRAFANA_TOKEN" }
-```
-
-```toml
-token = { op = "op://production/grafana/token" }
-```
-
-When the 1Password reference must be resolved from a specific account, set
-`op_account` to the selector passed to the CLI's `--account` option:
-
-```toml
-token = { op = "op://Private/DIALECTIC_GRAFANA_TOKEN/credential", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }
-```
-
-```toml
-token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
-```
-
-For a source containing both `env` and `op`, `mowz` reads the environment
-variable first. It runs `op read --no-newline <reference>` only when that
-variable is missing. With `op_account`, it adds `--account <selector>` to that
-command. Without `op_account`, the command is unchanged, so the 1Password CLI
-can continue to select an account through `OP_ACCOUNT`. `op_account` is valid
-only alongside `op`; mowz does not discover or try other accounts. An
-environment variable that is present but empty is not treated as missing; for
-`token`, the existing empty-token validation rejects the result. Resolved
-values are always used literally and are never recursively interpreted as
-another environment variable or 1Password reference.
-
-The combined form lets the same committed `.mowz.toml` work in both settings:
-
-- **Local:** install and authenticate the 1Password `op` CLI, then run
-  `mowz query ...`. If the environment variable is absent, `mowz` uses the
-  1Password fallback.
-- **Amp orb:** configure the named environment variable as an Amp project
-  secret, then run `mowz query ...`. The environment value wins, so the orb
-  does not need the `op` CLI.
-
-Direct 1Password resolution requires `op` to be installed, authenticated, and
-able to access the configured reference. Literal values are checked into the
-configuration file, so do not use a literal for a value that must remain
-secret.
+VictoriaLogs through Grafana ([LogsQL](https://docs.victoriametrics.com/victorialogs/logsql/); `scope_filter` requires the VictoriaLogs datasource plugin v0.18.1+):
 
 ```toml
 [projects.api]
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
-token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
+token = { env = "GRAFANA_TOKEN" }
 scope_filter = "_stream:{environment=\"production\"}"
 ```
 
-`scope_filter` is optional. When set, `mowz` sends it through the VictoriaLogs
-Grafana query model as `extraFilters`, which the datasource applies using
-VictoriaLogs `extra_filters` semantics. The user's LogsQL expression remains
-unchanged and separate from this fixed filter. This requires VictoriaLogs
-Grafana datasource plugin v0.18.1 or later.
-
-The scope filter is an application safety boundary that limits queries made
-through `mowz`; it is not credential-level authorization. Use credentials and
-backend access controls with an appropriate least-privilege scope when a user
-must not be able to bypass this application.
-
-Railway logs use `environmentLogs` and are explicitly scoped to either one
-service or every service in the configured environment. Existing Railway
-configurations with a `service_id` remain service-scoped; `scope = "service"`
-is shown below for clarity. The user's filter is combined with a fixed
-`@service:<service_id>` constraint.
+Railway, safely limited to one service ([find IDs and learn filter syntax](https://docs.railway.com/observability/logs)):
 
 ```toml
-[projects.api]
+[projects.worker]
 type = "railway"
 environment_id = "00000000-0000-0000-0000-000000000000"
 scope = "service"
 service_id = "00000000-0000-0000-0000-000000000000"
-token = { env = "RAILWAY_TOKEN", op = "op://production/railway/token" }
+token = { env = "RAILWAY_TOKEN" }
 auth = "project_token"
 ```
 
-To search all services in one environment, set `scope = "environment"` and
-omit `service_id`. Environment scope is never inferred from a missing service
-ID.
+Use `auth = "bearer"` for Railway account/workspace tokens. To intentionally query every service in one environment, use `scope = "environment"` and omit `service_id`. Check discovery without resolving secrets with `mowz projects`.
 
-```toml
-[projects.api]
-type = "railway"
-environment_id = "00000000-0000-0000-0000-000000000000"
-scope = "environment"
-token = { env = "RAILWAY_TOKEN", op = "op://production/railway/token" }
-auth = "project_token"
-```
+## Give your agent the skill
 
-Use `auth = "project_token"` for Railway project tokens, which are sent with the
-`Project-Access-Token` header. Use `auth = "bearer"` for account or workspace
-tokens. Railway queries use its [log filter syntax](https://docs.railway.com/observability/logs).
-Returned Railway entries include `serviceId` and `deploymentId` when Railway
-supplies those source tags.
+Point your agent's documented skill mechanism at [`skills/mowz/SKILL.md`](skills/mowz/SKILL.md). If it needs a copied file, `mowz skill` prints the identical bundled skill to stdout; redirect that output to the location required by your agent or skill manager.
 
-Each project requires one VictoriaLogs or Railway backend.
-
-Backend support:
-
-- VictoriaLogs through the Grafana API (implemented)
-- Railway service- and environment-scoped logs through the Railway API (implemented)
-
-## Non-goals
-
-- A dashboard or other graphical interface
-- Log ingestion, storage, or retention
-- Alerting or monitoring automation
-- A human-readable output mode
-- Translating between backend query languages
-- A unified query language in the first version
-
-## Distribution
-
-`mowz` is implemented in Rust and released with cargo-dist installers for
-Homebrew and shell installation.
-
-The standard Agent Skill is distributed as
-[`skills/mowz/SKILL.md`](skills/mowz/SKILL.md) for skill managers to consume.
-The same hand-authored file is embedded in the binary and can be printed to
-standard output without loading configuration:
+Then let the agent run bounded queries from the configured repository:
 
 ```sh
-mowz skill
+mowz query --from now-15m --to now worker '@level:error'
 ```
-
-Installation and discovery paths are owned by the agent or skill manager; mowz
-does not install the skill itself.
