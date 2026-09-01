@@ -108,6 +108,7 @@ secret source:
 url = "https://grafana.example.com"
 token = { env = "GRAFANA_TOKEN" }
 token = { op = "op://production/grafana/token" }
+token = { op = "op://Private/DIALECTIC_GRAFANA_TOKEN/credential", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }
 token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
 ```
 
@@ -117,7 +118,9 @@ Resolution follows these rules:
    names or `op://` references.
 2. When `env` is configured, use that variable if it is present.
 3. When the variable is absent and `op` is configured, run
-   `op read --no-newline <reference>`.
+   `op read --no-newline <reference>`. If `op_account` is present, pass its
+   selector with `--account`; otherwise, normal `op` and `OP_ACCOUNT` account
+   selection remains in effect. Mowz does not auto-discover or retry accounts.
 4. Treat a present but empty variable as present. Do not fall back to
    1Password; token validation will reject an empty token.
 5. Use resolved values literally. Never resolve them a second time.
