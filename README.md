@@ -74,16 +74,27 @@ token = { env = "GRAFANA_TOKEN" }
 token = { op = "op://production/grafana/token" }
 ```
 
+When the 1Password reference must be resolved from a specific account, set
+`op_account` to the selector passed to the CLI's `--account` option:
+
+```toml
+token = { op = "op://Private/DIALECTIC_GRAFANA_TOKEN/credential", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }
+```
+
 ```toml
 token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
 ```
 
 For a source containing both `env` and `op`, `mowz` reads the environment
 variable first. It runs `op read --no-newline <reference>` only when that
-variable is missing. An environment variable that is present but empty is not
-treated as missing; for `token`, the existing empty-token validation rejects
-the result. Resolved values are always used literally and are never recursively
-interpreted as another environment variable or 1Password reference.
+variable is missing. With `op_account`, it adds `--account <selector>` to that
+command. Without `op_account`, the command is unchanged, so the 1Password CLI
+can continue to select an account through `OP_ACCOUNT`. `op_account` is valid
+only alongside `op`; mowz does not discover or try other accounts. An
+environment variable that is present but empty is not treated as missing; for
+`token`, the existing empty-token validation rejects the result. Resolved
+values are always used literally and are never recursively interpreted as
+another environment variable or 1Password reference.
 
 The combined form lets the same committed `.mowz.toml` work in both settings:
 

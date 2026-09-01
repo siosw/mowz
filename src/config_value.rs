@@ -15,6 +15,7 @@ pub(crate) enum StringValue {
 pub(crate) struct StringSource {
     env: Option<String>,
     op: Option<String>,
+    op_account: Option<String>,
 }
 
 impl StringValue {
@@ -25,11 +26,19 @@ impl StringValue {
     fn resolve_with<E, O>(&self, mut read_env: E, mut read_op: O) -> Result<String>
     where
         E: FnMut(&str) -> std::result::Result<String, env::VarError>,
-        O: FnMut(&str) -> Result<String>,
+        O: FnMut(&str, Option<&str>) -> Result<String>,
     {
         match self {
             Self::Literal(value) => Ok(value.clone()),
-            Self::Source(StringSource { env, op }) => {
+            Self::Source(StringSource {
+                env,
+                op,
+                op_account,
+            }) => {
+                if op.is_none() && op_account.is_some() {
+                    bail!("string source cannot configure `op_account` without `op`");
+                }
+
                 if let Some(name) = env {
                     match read_env(name) {
                         Ok(value) => return Ok(value),
@@ -41,7 +50,7 @@ impl StringValue {
                 }
 
                 if let Some(reference) = op {
-                    return read_op(reference);
+                    return read_op(reference, op_account.as_deref());
                 }
 
                 if let Some(name) = env {
@@ -56,26 +65,38 @@ impl StringValue {
     }
 }
 
-fn read_op(reference: &str) -> Result<String> {
-    let output = op_read_command(reference)
+fn read_op(reference: &str, account: Option<&str>) -> Result<String> {
+    let output = op_read_command(reference, account)
         .output()
         .wrap_err(
             "failed to run `op read`; install the 1Password CLI and authenticate it, or provide the configured environment variable",
         )?;
 
+    parse_op_output(output)
+}
+
+fn parse_op_output(output: std::process::Output) -> Result<String> {
     if !output.status.success() {
-        bail!(
-            "`op read` failed; check that the 1Password CLI is authenticated and the configured reference is accessible"
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let message = "`op read` failed; check that the 1Password CLI is authenticated and the configured reference is accessible";
+        if stderr.is_empty() {
+            bail!(message);
+        }
+        bail!("{message}: {stderr}");
     }
 
     String::from_utf8(output.stdout)
         .wrap_err("`op read` returned a configured value that is not valid UTF-8")
 }
 
-fn op_read_command(reference: &str) -> Command {
+fn op_read_command(reference: &str, account: Option<&str>) -> Command {
     let mut command = Command::new("op");
-    command.args(["read", "--no-newline", reference]);
+    command.args(["read", "--no-newline"]);
+    if let Some(account) = account {
+        command.args(["--account", account]);
+    }
+    command.arg(reference);
     command
 }
 
@@ -99,7 +120,7 @@ mod tests {
             .value
             .resolve_with(
                 |_| panic!("literal read environment"),
-                |_| panic!("literal read op"),
+                |_, _| panic!("literal read op"),
             )
             .unwrap();
 
@@ -117,7 +138,7 @@ mod tests {
                     assert_eq!(name, "GRAFANA_TOKEN");
                     Ok("environment-secret".to_owned())
                 },
-                |_| panic!("env-only value read op"),
+                |_, _| panic!("env-only value read op"),
             )
             .unwrap();
 
@@ -133,8 +154,9 @@ mod tests {
             .value
             .resolve_with(
                 |_| panic!("op-only value read environment"),
-                |reference| {
+                |reference, account| {
                     assert_eq!(reference, "op://production/grafana/token");
+                    assert_eq!(account, None);
                     Ok("one-password-secret".to_owned())
                 },
             )
@@ -154,7 +176,7 @@ mod tests {
             .value
             .resolve_with(
                 |_| Ok("environment-secret".to_owned()),
-                |_| panic!("op fallback ran despite environment value"),
+                |_, _| panic!("op fallback ran despite environment value"),
             )
             .unwrap();
 
@@ -172,8 +194,9 @@ mod tests {
             .value
             .resolve_with(
                 |_| Err(env::VarError::NotPresent),
-                |reference| {
+                |reference, account| {
                     assert_eq!(reference, "op://production/grafana/token");
+                    assert_eq!(account, None);
                     Ok("one-password-secret".to_owned())
                 },
             )
@@ -193,7 +216,7 @@ mod tests {
             .value
             .resolve_with(
                 |_| Ok(String::new()),
-                |_| panic!("op fallback ran despite an empty environment value"),
+                |_, _| panic!("op fallback ran despite an empty environment value"),
             )
             .unwrap();
 
@@ -208,11 +231,56 @@ mod tests {
             .value
             .resolve_with(
                 |_| Ok("op://production/grafana/token".to_owned()),
-                |_| panic!("resolved environment value was reinterpreted"),
+                |_, _| panic!("resolved environment value was reinterpreted"),
             )
             .unwrap();
 
         assert_eq!(resolved, "op://production/grafana/token");
+    }
+
+    #[test]
+    fn resolves_op_with_configured_account() {
+        let value: TestValue = toml::from_str(
+            r#"value = { op = "op://Private/DIALECTIC_GRAFANA_TOKEN/credential", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }"#,
+        )
+        .unwrap();
+
+        let resolved = value
+            .value
+            .resolve_with(
+                |_| panic!("op-only value read environment"),
+                |reference, account| {
+                    assert_eq!(reference, "op://Private/DIALECTIC_GRAFANA_TOKEN/credential");
+                    assert_eq!(account, Some("54BDP35LLRDPFBNWXFDQQYCVXU"));
+                    Ok("one-password-secret".to_owned())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(resolved, "one-password-secret");
+    }
+
+    #[test]
+    fn rejects_op_account_without_op() {
+        let value: TestValue = toml::from_str(
+            r#"value = { env = "GRAFANA_TOKEN", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }"#,
+        )
+        .unwrap();
+
+        let error = value
+            .value
+            .resolve_with(
+                |_| panic!("invalid source read environment"),
+                |_, _| panic!("invalid source read op"),
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot configure `op_account` without `op`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -226,8 +294,8 @@ mod tests {
     }
 
     #[test]
-    fn builds_exact_op_read_command() {
-        let command = op_read_command("op://production/grafana/token");
+    fn builds_op_read_command_without_account() {
+        let command = op_read_command("op://production/grafana/token", None);
 
         assert_eq!(command.get_program(), OsStr::new("op"));
         assert_eq!(
@@ -238,5 +306,42 @@ mod tests {
                 OsStr::new("op://production/grafana/token"),
             ]
         );
+    }
+
+    #[test]
+    fn builds_op_read_command_with_account() {
+        let command = op_read_command(
+            "op://Private/DIALECTIC_GRAFANA_TOKEN/credential",
+            Some("54BDP35LLRDPFBNWXFDQQYCVXU"),
+        );
+
+        assert_eq!(command.get_program(), OsStr::new("op"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("read"),
+                OsStr::new("--no-newline"),
+                OsStr::new("--account"),
+                OsStr::new("54BDP35LLRDPFBNWXFDQQYCVXU"),
+                OsStr::new("op://Private/DIALECTIC_GRAFANA_TOKEN/credential"),
+            ]
+        );
+    }
+
+    #[test]
+    fn includes_trimmed_op_stderr_without_stdout_on_failure() {
+        let mut output = Command::new("sh")
+            .args([
+                "-c",
+                "printf '  account is ambiguous  \\n' >&2; printf 'secret-value'; exit 1",
+            ])
+            .output()
+            .unwrap();
+        output.stdout = b"sentinel-secret-value".to_vec();
+
+        let error = parse_op_output(output).unwrap_err().to_string();
+
+        assert!(error.ends_with(": account is ambiguous"), "{error}");
+        assert!(!error.contains("sentinel-secret-value"), "{error}");
     }
 }
