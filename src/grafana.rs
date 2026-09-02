@@ -1,8 +1,8 @@
-use eyre::{Context, Result, bail};
+use eyre::Result;
 use reqwest::{Client, header::CONTENT_TYPE};
 use serde_json::{Map, Value, json};
 
-use crate::{QueryOptions, diagnostic_body};
+use crate::{QueryOptions, http::parse_json_response};
 
 pub(crate) async fn query(
     client: &Client,
@@ -30,30 +30,17 @@ pub(crate) async fn query(
         "to": options.time_range.to(),
     });
 
-    let response = client
-        .post(endpoint)
-        .bearer_auth(token)
-        .header(CONTENT_TYPE, "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(reqwest::Error::without_url)
-        .context("failed to query Grafana")?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("failed to read Grafana response body")?;
-
-    if !status.is_success() {
-        bail!(
-            "Grafana query failed with status {status}: {}",
-            diagnostic_body(&body)
-        );
-    }
-
-    serde_json::from_str(&body).context("failed to parse Grafana response as JSON")
+    parse_json_response(
+        client
+            .post(endpoint)
+            .bearer_auth(token)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&payload)
+            .send()
+            .await,
+        "Grafana",
+    )
+    .await
 }
 
 pub(crate) fn extract_entries(response: &Value) -> Vec<Map<String, Value>> {
@@ -145,6 +132,65 @@ mod tests {
                 ("Line".to_owned(), json!("request completed")),
                 ("Time".to_owned(), json!("2026-08-18T12:00:00Z")),
             ])]
+        );
+    }
+
+    #[tokio::test]
+    async fn parses_successful_grafana_responses() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/ds/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": {} })))
+            .mount(&server)
+            .await;
+
+        let time_range = TimeRange::default();
+        let response = query(
+            &Client::new(),
+            &server.uri(),
+            "victoria-logs",
+            "token",
+            "query",
+            None,
+            &QueryOptions {
+                time_range: &time_range,
+                limit: 3,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, json!({ "results": {} }));
+    }
+
+    #[tokio::test]
+    async fn reports_invalid_grafana_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/ds/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not JSON"))
+            .mount(&server)
+            .await;
+
+        let time_range = TimeRange::default();
+        let error = query(
+            &Client::new(),
+            &server.uri(),
+            "victoria-logs",
+            "token",
+            "query",
+            None,
+            &QueryOptions {
+                time_range: &time_range,
+                limit: 3,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "failed to parse Grafana response as JSON"
         );
     }
 

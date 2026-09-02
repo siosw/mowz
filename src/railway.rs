@@ -1,10 +1,13 @@
 use chrono::{SecondsFormat, Utc};
-use eyre::{Context, Result, bail};
+use eyre::{Result, bail};
 use reqwest::{Client, header::CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::{QueryOptions, diagnostic_body};
+use crate::{
+    QueryOptions,
+    http::{diagnostic_body, parse_json_response},
+};
 
 const API_URL: &str = "https://backboard.railway.com/graphql/v2";
 
@@ -121,26 +124,14 @@ async fn query_api(
         RailwayAuth::ProjectToken => request.header("Project-Access-Token", token),
         RailwayAuth::Bearer => request.bearer_auth(token),
     };
-    let response = request
-        .json(&json!({ "query": query, "variables": variables }))
-        .send()
-        .await
-        .context("failed to query Railway")?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("failed to read Railway response body")?;
-    if !status.is_success() {
-        bail!(
-            "Railway query failed with status {status}: {}",
-            diagnostic_body(&body)
-        );
-    }
-
-    let response: Value =
-        serde_json::from_str(&body).context("failed to parse Railway response as JSON")?;
+    let response = parse_json_response(
+        request
+            .json(&json!({ "query": query, "variables": variables }))
+            .send()
+            .await,
+        "Railway",
+    )
+    .await?;
     if response
         .get("errors")
         .and_then(Value::as_array)
@@ -359,6 +350,48 @@ mod tests {
         );
         assert!(error.ends_with("... [truncated]"));
         assert!(!error.contains("sentinel tail"));
+    }
+
+    #[tokio::test]
+    async fn reports_invalid_railway_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql/v2"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not JSON"))
+            .mount(&server)
+            .await;
+
+        let error = query_api(
+            &Client::new(),
+            &format!("{}/graphql/v2", server.uri()),
+            "secret-token",
+            RailwayAuth::Bearer,
+            "query Test { me { id } }",
+            json!({}),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "failed to parse Railway response as JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_errors_do_not_expose_the_railway_url() {
+        let error = query_api(
+            &Client::new(),
+            "http://127.0.0.1:0/sentinel-secret",
+            "secret-token",
+            RailwayAuth::Bearer,
+            "query Test { me { id } }",
+            json!({}),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(!format!("{error:?}").contains("sentinel-secret"));
     }
 
     #[tokio::test]
