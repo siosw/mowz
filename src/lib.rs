@@ -50,13 +50,27 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-        toml::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
+        let config: Self = toml::from_str(&contents)
+            .wrap_err_with(|| format!("failed to parse {}", path.display()))?;
+        config
+            .validate()
+            .wrap_err_with(|| format!("invalid configuration in {}", path.display()))?;
+        Ok(config)
     }
 
     pub fn projects(&self) -> impl Iterator<Item = (&str, &'static str)> {
         self.projects
             .iter()
             .map(|(name, backend)| (name.as_str(), backend.name()))
+    }
+
+    fn validate(&self) -> Result<()> {
+        for (name, backend) in &self.projects {
+            backend
+                .validate()
+                .wrap_err_with(|| format!("invalid project {name:?}"))?;
+        }
+        Ok(())
     }
 }
 
@@ -65,6 +79,111 @@ impl Backend {
         match self {
             Self::VictoriaLogs { .. } => "victoria_logs",
             Self::Railway { .. } => "railway",
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::VictoriaLogs {
+                url,
+                datasource_uid,
+                token,
+                scope_filter,
+            } => {
+                url.validate().wrap_err("invalid `url`")?;
+                datasource_uid
+                    .validate()
+                    .wrap_err("invalid `datasource_uid`")?;
+                token.validate().wrap_err("invalid `token`")?;
+                if let Some(scope_filter) = scope_filter {
+                    scope_filter.validate().wrap_err("invalid `scope_filter`")?;
+                }
+            }
+            Self::Railway {
+                environment_id,
+                scope,
+                service_id,
+                token,
+                ..
+            } => {
+                scope.validate(service_id.is_some())?;
+                environment_id
+                    .validate()
+                    .wrap_err("invalid `environment_id`")?;
+                if let Some(service_id) = service_id {
+                    service_id.validate().wrap_err("invalid `service_id`")?;
+                }
+                token.validate().wrap_err("invalid `token`")?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn query(
+        &self,
+        query: &str,
+        options: &QueryOptions<'_>,
+        client: &Client,
+    ) -> Result<Vec<Map<String, Value>>> {
+        match self {
+            Self::VictoriaLogs {
+                url,
+                datasource_uid,
+                token,
+                scope_filter,
+            } => {
+                let url = url.resolve().wrap_err("failed to resolve `url`")?;
+                let datasource_uid = datasource_uid
+                    .resolve()
+                    .wrap_err("failed to resolve `datasource_uid`")?;
+                let token = read_token(token)?;
+                let scope_filter = scope_filter
+                    .as_ref()
+                    .map(StringValue::resolve)
+                    .transpose()
+                    .wrap_err("failed to resolve `scope_filter`")?;
+                let response = grafana::query(
+                    client,
+                    &url,
+                    &datasource_uid,
+                    &token,
+                    query,
+                    scope_filter.as_deref(),
+                    options,
+                )
+                .await?;
+                Ok(bound_entries(
+                    grafana::extract_entries(&response),
+                    false,
+                    options.limit,
+                ))
+            }
+            Self::Railway {
+                environment_id,
+                scope,
+                service_id,
+                token,
+                auth,
+            } => {
+                let environment_id = environment_id
+                    .resolve()
+                    .wrap_err("failed to resolve `environment_id`")?;
+                let service_id = service_id
+                    .as_ref()
+                    .map(StringValue::resolve)
+                    .transpose()
+                    .wrap_err("failed to resolve `service_id`")?;
+                let filter = scope.filter(service_id.as_deref(), query)?;
+                let token = read_token(token)?;
+                let response =
+                    railway::query_logs(client, &token, *auth, &environment_id, &filter, options)
+                        .await?;
+                Ok(bound_entries(
+                    railway::extract_entries(&response),
+                    true,
+                    options.limit,
+                ))
+            }
         }
     }
 }
@@ -87,60 +206,7 @@ pub async fn query_project(
         .get(project_name)
         .ok_or_else(|| eyre::eyre!("project {project_name:?} is not configured"))?;
 
-    let entries = match backend {
-        Backend::VictoriaLogs {
-            url,
-            datasource_uid,
-            token,
-            scope_filter,
-        } => {
-            let url = url.resolve().wrap_err("failed to resolve `url`")?;
-            let datasource_uid = datasource_uid
-                .resolve()
-                .wrap_err("failed to resolve `datasource_uid`")?;
-            let token = read_token(token)?;
-            let scope_filter = scope_filter
-                .as_ref()
-                .map(StringValue::resolve)
-                .transpose()
-                .wrap_err("failed to resolve `scope_filter`")?;
-            let response = grafana::query(
-                client,
-                &url,
-                &datasource_uid,
-                &token,
-                query,
-                scope_filter.as_deref(),
-                &options,
-            )
-            .await?;
-            bound_entries(grafana::extract_entries(&response), false, limit)
-        }
-        Backend::Railway {
-            environment_id,
-            scope,
-            service_id,
-            token,
-            auth,
-        } => {
-            let environment_id = environment_id
-                .resolve()
-                .wrap_err("failed to resolve `environment_id`")?;
-            let service_id = service_id
-                .as_ref()
-                .map(StringValue::resolve)
-                .transpose()
-                .wrap_err("failed to resolve `service_id`")?;
-            let filter = scope.filter(service_id.as_deref(), query)?;
-            let token = read_token(token)?;
-            let response =
-                railway::query_logs(client, &token, *auth, &environment_id, &filter, &options)
-                    .await?;
-            bound_entries(railway::extract_entries(&response), true, limit)
-        }
-    };
-
-    Ok(entries)
+    backend.query(query, &options, client).await
 }
 
 fn read_token(value: &StringValue) -> Result<String> {
@@ -179,6 +245,7 @@ fn diagnostic_body(body: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_railway_service_config() {
@@ -267,6 +334,66 @@ auth = "bearer"
     }
 
     #[test]
+    fn rejects_invalid_railway_scope_relationships_when_loading_config() {
+        for (scope, service_id, expected) in [
+            ("service", "", "Railway service scope requires service_id"),
+            (
+                "environment",
+                "service_id = { env = \"MOWZ_TEST_MISSING_SERVICE_ID\" }\n",
+                "Railway environment scope must not configure service_id",
+            ),
+        ] {
+            let directory = tempdir().unwrap();
+            let path = directory.path().join(".mowz.toml");
+            fs::write(
+                &path,
+                format!(
+                    r#"[projects.api]
+type = "railway"
+environment_id = {{ env = "MOWZ_TEST_MISSING_ENVIRONMENT_ID" }}
+scope = "{scope}"
+{service_id}token = {{ op = "op://missing/railway/token" }}
+auth = "project_token"
+"#
+                ),
+            )
+            .unwrap();
+
+            let error = Config::load(&path).unwrap_err();
+            let diagnostic = format!("{error:?}");
+            assert!(
+                diagnostic.contains("invalid project \"api\""),
+                "{diagnostic}"
+            );
+            assert!(diagnostic.contains(expected), "{diagnostic}");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_secret_source_structure_when_loading_config() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(".mowz.toml");
+        fs::write(
+            &path,
+            r#"[projects.api]
+type = "victoria_logs"
+url = "https://grafana.example.com"
+datasource_uid = "victoria-logs"
+token = { env = "MOWZ_TEST_MISSING_TOKEN", op_account = "account-id" }
+"#,
+        )
+        .unwrap();
+
+        let error = Config::load(&path).unwrap_err();
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains("invalid `token`"), "{diagnostic}");
+        assert!(
+            diagnostic.contains("cannot configure `op_account` without `op`"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
     fn rejects_empty_resolved_token() {
         let error = read_token(&StringValue::Literal(String::new())).unwrap_err();
 
@@ -293,6 +420,7 @@ auth = "bearer"
             r#"[projects.worker]
 type = "railway"
 environment_id = "environment-id"
+service_id = "service-id"
 token = { env = "RAILWAY_TOKEN" }
 auth = "project_token"
 

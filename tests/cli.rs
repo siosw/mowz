@@ -101,6 +101,7 @@ fn projects_lists_names_and_backends_without_resolving_secrets() {
         r#"[projects.worker]
 type = "railway"
 environment_id = "environment-id"
+service_id = "service-id"
 token = { env = "MOWZ_TEST_MISSING_RAILWAY_TOKEN" }
 auth = "project_token"
 
@@ -108,7 +109,7 @@ auth = "project_token"
 type = "victoria_logs"
 url = "https://grafana.example.com"
 datasource_uid = "victoria-logs"
-token = { env = "MOWZ_TEST_MISSING_GRAFANA_TOKEN" }
+token = { op = "op://missing/grafana/token" }
 "#,
     )
     .unwrap();
@@ -117,7 +118,7 @@ token = { env = "MOWZ_TEST_MISSING_GRAFANA_TOKEN" }
         .arg("projects")
         .current_dir(directory.path())
         .env_remove("MOWZ_TEST_MISSING_RAILWAY_TOKEN")
-        .env_remove("MOWZ_TEST_MISSING_GRAFANA_TOKEN")
+        .env("PATH", "")
         .output()
         .unwrap();
 
@@ -128,6 +129,48 @@ token = { env = "MOWZ_TEST_MISSING_GRAFANA_TOKEN" }
         "{\"project\":\"api\",\"backend\":\"victoria_logs\"}\n\
 {\"project\":\"worker\",\"backend\":\"railway\"}\n"
     );
+}
+
+#[test]
+fn projects_rejects_invalid_railway_scope_relationships() {
+    for (scope, service_id, expected) in [
+        ("service", "", "Railway service scope requires service_id"),
+        (
+            "environment",
+            "service_id = { op = \"op://missing/railway/service-id\" }\n",
+            "Railway environment scope must not configure service_id",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join(".mowz.toml"),
+            format!(
+                r#"[projects.api]
+type = "railway"
+environment_id = {{ env = "MOWZ_TEST_MISSING_ENVIRONMENT_ID" }}
+scope = "{scope}"
+{service_id}token = {{ op = "op://missing/railway/token" }}
+auth = "project_token"
+"#
+            ),
+        )
+        .unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_mowz"))
+            .arg("projects")
+            .current_dir(directory.path())
+            .env_remove("MOWZ_TEST_MISSING_ENVIRONMENT_ID")
+            .env("PATH", "")
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("invalid project \"api\""), "{stderr}");
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(!stderr.contains("failed to resolve"), "{stderr}");
+    }
 }
 
 #[test]

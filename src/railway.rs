@@ -24,6 +24,16 @@ pub(crate) enum RailwayAuth {
 }
 
 impl RailwayScope {
+    pub(crate) fn validate(self, has_service_id: bool) -> Result<()> {
+        match (self, has_service_id) {
+            (Self::Service, false) => bail!("Railway service scope requires service_id"),
+            (Self::Environment, true) => {
+                bail!("Railway environment scope must not configure service_id")
+            }
+            _ => Ok(()),
+        }
+    }
+
     pub(crate) fn filter(self, service_id: Option<&str>, filter: &str) -> Result<String> {
         match (self, service_id) {
             (Self::Service, Some(service_id)) if filter.is_empty() => {
