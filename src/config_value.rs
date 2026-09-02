@@ -19,6 +19,25 @@ pub(crate) struct StringSource {
 }
 
 impl StringValue {
+    pub(crate) fn validate(&self) -> Result<()> {
+        let Self::Source(StringSource {
+            env,
+            op,
+            op_account,
+        }) = self
+        else {
+            return Ok(());
+        };
+
+        if op.is_none() && op_account.is_some() {
+            bail!("string source cannot configure `op_account` without `op`");
+        }
+        if env.is_none() && op.is_none() {
+            bail!("string source must configure `env`, `op`, or both");
+        }
+        Ok(())
+    }
+
     pub(crate) fn resolve(&self) -> Result<String> {
         self.resolve_with(|name| env::var(name), read_op)
     }
@@ -28,6 +47,7 @@ impl StringValue {
         E: FnMut(&str) -> std::result::Result<String, env::VarError>,
         O: FnMut(&str, Option<&str>) -> Result<String>,
     {
+        self.validate()?;
         match self {
             Self::Literal(value) => Ok(value.clone()),
             Self::Source(StringSource {
@@ -35,10 +55,6 @@ impl StringValue {
                 op,
                 op_account,
             }) => {
-                if op.is_none() && op_account.is_some() {
-                    bail!("string source cannot configure `op_account` without `op`");
-                }
-
                 if let Some(name) = env {
                     match read_env(name) {
                         Ok(value) => return Ok(value),
@@ -59,7 +75,7 @@ impl StringValue {
                     );
                 }
 
-                bail!("string source must configure `env`, `op`, or both")
+                unreachable!("string sources are structurally validated when configuration loads")
             }
         }
     }
