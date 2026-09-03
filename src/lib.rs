@@ -151,11 +151,7 @@ impl Backend {
                     options,
                 )
                 .await?;
-                Ok(bound_entries(
-                    grafana::extract_entries(&response),
-                    false,
-                    options.limit,
-                ))
+                Ok(bound_entries(response, false, options.limit))
             }
             Self::Railway {
                 environment_id,
@@ -177,11 +173,7 @@ impl Backend {
                 let response =
                     railway::query_logs(client, &token, *auth, &environment_id, &filter, options)
                         .await?;
-                Ok(bound_entries(
-                    railway::extract_entries(&response),
-                    true,
-                    options.limit,
-                ))
+                Ok(bound_entries(response, true, options.limit))
             }
         }
     }

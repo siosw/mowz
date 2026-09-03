@@ -1,8 +1,42 @@
+use std::collections::BTreeMap;
+
 use eyre::Result;
 use reqwest::{Client, header::CONTENT_TYPE};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{QueryOptions, http::parse_json_response};
+
+#[derive(Deserialize)]
+struct GrafanaResponse {
+    results: BTreeMap<String, GrafanaResult>,
+}
+
+#[derive(Deserialize)]
+struct GrafanaResult {
+    frames: Vec<GrafanaFrame>,
+}
+
+#[derive(Deserialize)]
+struct GrafanaFrame {
+    schema: GrafanaSchema,
+    data: GrafanaData,
+}
+
+#[derive(Deserialize)]
+struct GrafanaSchema {
+    fields: Vec<GrafanaField>,
+}
+
+#[derive(Deserialize)]
+struct GrafanaField {
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GrafanaData {
+    values: Vec<Vec<Value>>,
+}
 
 pub(crate) async fn query(
     client: &Client,
@@ -12,7 +46,7 @@ pub(crate) async fn query(
     query: &str,
     scope_filter: Option<&str>,
     options: &QueryOptions<'_>,
-) -> Result<Value> {
+) -> Result<Vec<Map<String, Value>>> {
     let endpoint = format!("{}/api/ds/query", grafana_url.trim_end_matches('/'));
     let mut query_model = json!({
         "refId": "A",
@@ -30,7 +64,7 @@ pub(crate) async fn query(
         "to": options.time_range.to(),
     });
 
-    parse_json_response(
+    let response = parse_json_response(
         client
             .post(endpoint)
             .bearer_auth(token)
@@ -40,67 +74,47 @@ pub(crate) async fn query(
             .await,
         "Grafana",
     )
-    .await
+    .await?;
+    Ok(extract_entries(response))
 }
 
-pub(crate) fn extract_entries(response: &Value) -> Vec<Map<String, Value>> {
+fn extract_entries(response: GrafanaResponse) -> Vec<Map<String, Value>> {
     response
-        .get("results")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|results| results.values())
+        .results
+        .into_values()
         .flat_map(extract_result_entries)
         .collect()
 }
 
-fn extract_result_entries(result: &Value) -> Vec<Map<String, Value>> {
+fn extract_result_entries(result: GrafanaResult) -> Vec<Map<String, Value>> {
     result
-        .get("frames")
-        .and_then(Value::as_array)
+        .frames
         .into_iter()
-        .flatten()
         .flat_map(extract_frame_entries)
         .collect()
 }
 
-fn extract_frame_entries(frame: &Value) -> Vec<Map<String, Value>> {
-    let Some(fields) = frame
-        .get("schema")
-        .and_then(|schema| schema.get("fields"))
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
-    };
-    let Some(values) = frame
-        .get("data")
-        .and_then(|data| data.get("values"))
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
-    };
-
-    let row_count = values
-        .iter()
-        .filter_map(Value::as_array)
-        .map(Vec::len)
-        .max()
-        .unwrap_or(0);
+fn extract_frame_entries(frame: GrafanaFrame) -> Vec<Map<String, Value>> {
+    let row_count = frame.data.values.iter().map(Vec::len).max().unwrap_or(0);
 
     (0..row_count)
         .filter_map(|row| {
-            let entry = fields
+            let entry = frame
+                .schema
+                .fields
                 .iter()
                 .enumerate()
                 .filter_map(|(column, field)| {
                     let name = field
-                        .get("name")
-                        .and_then(Value::as_str)
+                        .name
+                        .as_deref()
                         .filter(|name| !name.is_empty())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| format!("field_{column}"));
-                    let value = values
+                    let value = frame
+                        .data
+                        .values
                         .get(column)
-                        .and_then(Value::as_array)
                         .and_then(|column| column.get(row))
                         .filter(|value| !value.is_null())?
                         .clone();
@@ -123,16 +137,55 @@ mod tests {
 
     #[test]
     fn parses_grafana_frames_into_entries() {
-        let response: Value =
+        let response: GrafanaResponse =
             serde_json::from_str(include_str!("../tests/fixtures/grafana-response.json")).unwrap();
 
         assert_eq!(
-            extract_entries(&response),
+            extract_entries(response),
             vec![Map::from_iter([
                 ("Line".to_owned(), json!("request completed")),
                 ("Time".to_owned(), json!("2026-08-18T12:00:00Z")),
             ])]
         );
+    }
+
+    #[test]
+    fn accepts_empty_grafana_results() {
+        let response: GrafanaResponse = serde_json::from_value(json!({ "results": {} })).unwrap();
+
+        assert!(extract_entries(response).is_empty());
+    }
+
+    #[tokio::test]
+    async fn reports_grafana_response_schema_drift() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/ds/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": { "A": { "series": [] } }
+            })))
+            .mount(&server)
+            .await;
+
+        let time_range = TimeRange::default();
+        let error = query(
+            &Client::new(),
+            &server.uri(),
+            "victoria-logs",
+            "token",
+            "query",
+            None,
+            &QueryOptions {
+                time_range: &time_range,
+                limit: 3,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        let error = format!("{error:?}");
+        assert!(error.contains("failed to parse Grafana response as the expected schema"));
+        assert!(error.contains("missing field `frames`"));
     }
 
     #[tokio::test]
@@ -160,7 +213,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(response, json!({ "results": {} }));
+        assert!(response.is_empty());
     }
 
     #[tokio::test]
@@ -190,7 +243,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "failed to parse Grafana response as JSON"
+            "failed to parse Grafana response as the expected schema"
         );
     }
 

@@ -11,6 +11,34 @@ use crate::{
 
 const API_URL: &str = "https://backboard.railway.com/graphql/v2";
 
+#[derive(Deserialize)]
+struct RailwayResponse {
+    data: Option<RailwayData>,
+    #[serde(default)]
+    errors: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RailwayData {
+    environment_logs: Vec<RailwayLog>,
+}
+
+#[derive(Deserialize)]
+struct RailwayLog {
+    timestamp: Value,
+    message: Value,
+    severity: Value,
+    tags: Option<RailwayTags>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RailwayTags {
+    service_id: Value,
+    deployment_id: Value,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RailwayScope {
@@ -63,7 +91,7 @@ pub(crate) async fn query_logs(
     environment_id: &str,
     filter: &str,
     options: &QueryOptions<'_>,
-) -> Result<Value> {
+) -> Result<Vec<Map<String, Value>>> {
     query_logs_at(
         client,
         API_URL,
@@ -84,7 +112,7 @@ async fn query_logs_at(
     environment_id: &str,
     filter: &str,
     options: &QueryOptions<'_>,
-) -> Result<Value> {
+) -> Result<Vec<Map<String, Value>>> {
     let query = r#"query EnvironmentLogs($environmentId: String!, $filter: String, $beforeDate: String!, $anchorDate: String!, $afterDate: String!, $beforeLimit: Int!, $afterLimit: Int!) {
   environmentLogs(environmentId: $environmentId, filter: $filter, beforeDate: $beforeDate, anchorDate: $anchorDate, afterDate: $afterDate, beforeLimit: $beforeLimit, afterLimit: $afterLimit) {
     timestamp
@@ -126,7 +154,7 @@ async fn query_api(
     auth: RailwayAuth,
     query: &str,
     variables: Value,
-) -> Result<Value> {
+) -> Result<Vec<Map<String, Value>>> {
     let request = client
         .post(api_url)
         .header(CONTENT_TYPE, "application/json");
@@ -134,7 +162,7 @@ async fn query_api(
         RailwayAuth::ProjectToken => request.header("Project-Access-Token", token),
         RailwayAuth::Bearer => request.bearer_auth(token),
     };
-    let response = parse_json_response(
+    let response: RailwayResponse = parse_json_response(
         request
             .json(&json!({ "query": query, "variables": variables }))
             .send()
@@ -142,48 +170,40 @@ async fn query_api(
         "Railway",
     )
     .await?;
-    if response
-        .get("errors")
-        .and_then(Value::as_array)
-        .is_some_and(|errors| !errors.is_empty())
-    {
-        let errors = response["errors"].to_string();
+    if !response.errors.is_empty() {
+        let errors = serde_json::to_string(&response.errors)?;
         bail!(
             "Railway query returned GraphQL errors: {}",
             diagnostic_body(&errors)
         );
     }
-    Ok(response)
+    let data = response.data.ok_or_else(|| {
+        eyre::eyre!("failed to parse Railway response as the expected schema: missing field `data`")
+    })?;
+    Ok(extract_entries(data))
 }
 
-pub(crate) fn extract_entries(response: &Value) -> Vec<Map<String, Value>> {
-    response
-        .pointer("/data/environmentLogs")
-        .and_then(Value::as_array)
+fn extract_entries(data: RailwayData) -> Vec<Map<String, Value>> {
+    data.environment_logs
         .into_iter()
-        .flatten()
-        .filter_map(Value::as_object)
         .map(|entry| {
-            let mut selected = ["timestamp", "message", "severity"]
-                .into_iter()
-                .filter_map(|field| {
-                    entry
-                        .get(field)
-                        .filter(|value| !value.is_null())
-                        .cloned()
-                        .map(|value| (field.to_owned(), value))
-                })
-                .collect::<Map<_, _>>();
-            if let Some(tags) = entry.get("tags").and_then(Value::as_object) {
+            let mut selected = [
+                ("timestamp", entry.timestamp),
+                ("message", entry.message),
+                ("severity", entry.severity),
+            ]
+            .into_iter()
+            .filter(|(_, value)| !value.is_null())
+            .map(|(field, value)| (field.to_owned(), value))
+            .collect::<Map<_, _>>();
+            if let Some(tags) = entry.tags {
                 selected.extend(
-                    ["serviceId", "deploymentId"]
-                        .into_iter()
-                        .filter_map(|field| {
-                            tags.get(field)
-                                .filter(|value| !value.is_null())
-                                .cloned()
-                                .map(|value| (field.to_owned(), value))
-                        }),
+                    [
+                        ("serviceId".to_owned(), tags.service_id),
+                        ("deploymentId".to_owned(), tags.deployment_id),
+                    ]
+                    .into_iter()
+                    .filter(|(_, value)| !value.is_null()),
                 );
             }
             selected
@@ -205,11 +225,11 @@ mod tests {
 
     #[test]
     fn parses_railway_logs_into_entries() {
-        let response: Value =
+        let response: RailwayResponse =
             serde_json::from_str(include_str!("../tests/fixtures/railway-response.json")).unwrap();
 
         assert_eq!(
-            extract_entries(&response),
+            extract_entries(response.data.unwrap()),
             vec![Map::from_iter([
                 ("deploymentId".to_owned(), json!("deployment-id")),
                 ("message".to_owned(), json!("request completed")),
@@ -218,6 +238,43 @@ mod tests {
                 ("timestamp".to_owned(), json!("2026-08-18T12:00:00Z")),
             ])]
         );
+    }
+
+    #[test]
+    fn accepts_empty_railway_logs() {
+        let response: RailwayResponse = serde_json::from_value(json!({
+            "data": { "environmentLogs": [] }
+        }))
+        .unwrap();
+
+        assert!(extract_entries(response.data.unwrap()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn reports_railway_response_schema_drift() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql/v2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "logs": [] }
+            })))
+            .mount(&server)
+            .await;
+
+        let error = query_api(
+            &Client::new(),
+            &format!("{}/graphql/v2", server.uri()),
+            "secret-token",
+            RailwayAuth::Bearer,
+            "query Test { environmentLogs { message } }",
+            json!({}),
+        )
+        .await
+        .unwrap_err();
+
+        let error = format!("{error:?}");
+        assert!(error.contains("failed to parse Railway response as the expected schema"));
+        assert!(error.contains("missing field `environmentLogs`"));
     }
 
     #[test]
@@ -279,7 +336,7 @@ mod tests {
         let api_url = format!("{}/graphql/v2", server.uri());
         let client = Client::new();
         let time_range = TimeRange::new("now-6h", "now-30m");
-        let response = query_logs_at(
+        let entries = query_logs_at(
             &client,
             &api_url,
             "secret-token",
@@ -293,7 +350,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let entries = bound_entries(extract_entries(&response), true, 100);
+        let entries = bound_entries(entries, true, 100);
         assert_eq!(entries.len(), 100);
         assert_eq!(entries[0]["message"], "line 1");
         assert_eq!(entries[0]["serviceId"], "service-id");
@@ -384,7 +441,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "failed to parse Railway response as JSON"
+            "failed to parse Railway response as the expected schema"
         );
     }
 
