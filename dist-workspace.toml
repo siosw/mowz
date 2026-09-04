@@ -5,6 +5,8 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
+# Allow releases to be started by another GitHub Actions workflow
+dispatch-releases = true
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
