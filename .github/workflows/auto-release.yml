@@ -1,0 +1,77 @@
+name: Auto release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.toml
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  dispatch-release:
+    name: Dispatch release for version bump
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect package version change
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import os
+          import pathlib
+          import subprocess
+          import tomllib
+
+          def package_version(manifest, source):
+              version = tomllib.loads(manifest.decode())["package"]["version"]
+              if not isinstance(version, str) or "\n" in version or "\r" in version:
+                  raise ValueError(f"invalid package version in {source}")
+              return version
+
+          before_sha = os.environ["BEFORE_SHA"]
+          previous_manifest = subprocess.check_output(
+              ["git", "show", f"{before_sha}:Cargo.toml"]
+          )
+          current_manifest = pathlib.Path("Cargo.toml").read_bytes()
+          previous = package_version(previous_manifest, f"{before_sha}:Cargo.toml")
+          current = package_version(current_manifest, "Cargo.toml")
+          changed = previous != current
+
+          print(f"Package version: {previous} -> {current}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"changed={str(changed).lower()}", file=output)
+              print(f"tag=v{current}", file=output)
+          PY
+
+      - name: Create immutable release tag
+        if: steps.version.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; refusing to release it again." >&2
+            exit 1
+          fi
+
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Dispatch cargo-dist release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh workflow run release.yml --ref "$TAG" --field tag="$TAG"
