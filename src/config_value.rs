@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn resolves_op_with_configured_account() {
         let value: TestValue = toml::from_str(
-            r#"value = { op = "op://Private/DIALECTIC_GRAFANA_TOKEN/credential", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }"#,
+            r#"value = { op = "op://production/grafana/token", op_account = "account-id" }"#,
         )
         .unwrap();
 
@@ -266,8 +266,8 @@ mod tests {
             .resolve_with(
                 |_| panic!("op-only value read environment"),
                 |reference, account| {
-                    assert_eq!(reference, "op://Private/DIALECTIC_GRAFANA_TOKEN/credential");
-                    assert_eq!(account, Some("54BDP35LLRDPFBNWXFDQQYCVXU"));
+                    assert_eq!(reference, "op://production/grafana/token");
+                    assert_eq!(account, Some("account-id"));
                     Ok("one-password-secret".to_owned())
                 },
             )
@@ -278,10 +278,9 @@ mod tests {
 
     #[test]
     fn rejects_op_account_without_op() {
-        let value: TestValue = toml::from_str(
-            r#"value = { env = "GRAFANA_TOKEN", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }"#,
-        )
-        .unwrap();
+        let value: TestValue =
+            toml::from_str(r#"value = { env = "GRAFANA_TOKEN", op_account = "account-id" }"#)
+                .unwrap();
 
         let error = value
             .value
@@ -326,10 +325,7 @@ mod tests {
 
     #[test]
     fn builds_op_read_command_with_account() {
-        let command = op_read_command(
-            "op://Private/DIALECTIC_GRAFANA_TOKEN/credential",
-            Some("54BDP35LLRDPFBNWXFDQQYCVXU"),
-        );
+        let command = op_read_command("op://production/grafana/token", Some("account-id"));
 
         assert_eq!(command.get_program(), OsStr::new("op"));
         assert_eq!(
@@ -338,8 +334,8 @@ mod tests {
                 OsStr::new("read"),
                 OsStr::new("--no-newline"),
                 OsStr::new("--account"),
-                OsStr::new("54BDP35LLRDPFBNWXFDQQYCVXU"),
-                OsStr::new("op://Private/DIALECTIC_GRAFANA_TOKEN/credential"),
+                OsStr::new("account-id"),
+                OsStr::new("op://production/grafana/token"),
             ]
         );
     }

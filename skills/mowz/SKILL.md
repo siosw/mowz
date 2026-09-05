@@ -108,7 +108,7 @@ secret source:
 url = "https://grafana.example.com"
 token = { env = "GRAFANA_TOKEN" }
 token = { op = "op://production/grafana/token" }
-token = { op = "op://Private/DIALECTIC_GRAFANA_TOKEN/credential", op_account = "54BDP35LLRDPFBNWXFDQQYCVXU" }
+token = { op = "op://production/grafana/token", op_account = "account-id" }
 token = { env = "GRAFANA_TOKEN", op = "op://production/grafana/token" }
 ```
 
